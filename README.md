@@ -1,6 +1,7 @@
 ![](documentation/edgeless-logo-alpha-200.png)
 # EDGELESS-PROJECT
 Cognitive EDGE-cloud with serverless computing
+I am currently developing and extending EDGELESS capabilities
 
 # EDGELESS Reference Implementation
 
