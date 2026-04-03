@@ -128,3 +128,6 @@ The Repository is licensed under the MIT License. Please refer to
 EDGELESS received funding from the [European Health and Digital Executive Agency
 (HADEA)](https://hadea.ec.europa.eu/) program under Grant Agreement No
 101092950.
+# EDGELESS-PROJECT
+Cognitive EDGE-cloud with serverless computing
+
