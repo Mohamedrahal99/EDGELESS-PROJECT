@@ -1,0 +1,112 @@
+{
+  "functions": [
+
+    {
+      "name": "writer",
+      "class_specification": {
+        "id": "writer",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/writer/target/wasm32-unknown-unknown/release/writer.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "multiplex"
+      },
+      "annotations": {
+        "init_payload": "period=500"
+      }
+    },
+
+    {
+      "name": "multiplex",
+      "class_specification": {
+        "id": "multiplex",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/multiplex/target/wasm32-unknown-unknown/release/multiplex.wasm",
+        "outputs": [
+          "out1",
+          "out2",
+          "out3"
+        ]
+      },
+      "output_mapping": {
+        "out1": "lambda0",
+        "out2": "lambda1",
+        "out3": "lambda2"
+      },
+      "annotations": {
+        "init_payload": "num_outputs=3"
+      }
+    },
+
+    {
+      "name": "lambda0",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=200,key_space=100"
+      }
+    },
+
+    {
+      "name": "lambda1",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=200,key_space=100"
+      }
+    },
+
+    {
+      "name": "lambda2",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=200,key_space=100"
+      }
+    },
+
+    {
+      "name": "mem",
+      "class_specification": {
+        "id": "mem",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/mem/target/wasm32-unknown-unknown/release/mem.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {}
+    }
+
+  ],
+
+  "resources": [],
+  "annotations": {}
+}

@@ -1,0 +1,7 @@
+{
+  "id": "mem",
+  "function_type": "RUST_WASM",
+  "version": "0.1",
+  "code": "target/wasm32-unknown-unknown/release/mem.wasm",
+  "outputs": []
+}

@@ -18,3 +18,10 @@ symbols.json
 .*bkp
 *.save
 build_functions.log
+dataset/
+target/
+target2/
+target3/
+res/
+results/
+

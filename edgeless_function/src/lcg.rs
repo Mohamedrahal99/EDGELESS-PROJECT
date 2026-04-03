@@ -32,7 +32,7 @@ pub fn random_matrix(lcg: &mut Lcg, size: usize) -> Vec<f32> {
 }
 
 pub fn random_vector(lcg: &mut Lcg, size: usize) -> Vec<f32> {
-    let mut new_vector = vec![0.0; size];
+    let mut new_vector: Vec<f32> = vec![0.0; size];
     for value in new_vector.iter_mut() {
         *value = lcg.rand();
     }

@@ -17,7 +17,6 @@ members = [
     "edgeless_inabox",
     "edgeless_node",
     "edgeless_orc",
-    "edgeless_systemtests",
     "edgeless_telemetry",
     # "edgeless_cloud_offloading", # Optional component; uncomment this line if you need to use this component
 ]

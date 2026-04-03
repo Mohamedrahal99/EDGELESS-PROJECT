@@ -1,0 +1,111 @@
+{
+  "functions": [
+
+    {
+      "name": "writer1",
+      "class_specification": {
+        "id": "writer",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/writer/target/wasm32-unknown-unknown/release/writer.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {"init-payload": "writer1"}
+    },
+
+    {
+      "name": "writer2",
+      "class_specification": {
+        "id": "writer",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/writer/target/wasm32-unknown-unknown/release/writer.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {"init-payload": "writer2"}
+    },
+
+    {
+      "name": "mem",
+      "class_specification": {
+        "id": "mem",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/mem/target/wasm32-unknown-unknown/release/mem.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "load_balance"
+      },
+      "annotations": {}
+    },
+
+    {
+      "name": "load_balance",
+      "class_specification": {
+        "id": "load_balance",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/load_balance/target/wasm32-unknown-unknown/release/load_balance.wasm",
+        "outputs": ["out1", "out2", "out3"]
+      },
+      "output_mapping": {
+        "out1": "reader1",
+        "out2": "reader2",
+        "out3": "reader3"
+      },
+      "annotations": {
+        "init-payload": "num_outputs=3"
+      }
+    },
+
+    {
+      "name": "reader1",
+      "class_specification": {
+        "id": "reader",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/reader/target/wasm32-unknown-unknown/release/reader.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {"init-payload": "reader1"}
+    },
+
+    {
+      "name": "reader2",
+      "class_specification": {
+        "id": "reader",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/reader/target/wasm32-unknown-unknown/release/reader.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {"init-payload": "reader2"}
+    },
+
+    {
+      "name": "reader3",
+      "class_specification": {
+        "id": "reader",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/reader/target/wasm32-unknown-unknown/release/reader.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {"init-payload": "reader3"}
+    }
+
+  ],
+
+  "resources": [],
+  "annotations": {}
+}

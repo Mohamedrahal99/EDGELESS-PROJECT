@@ -1,0 +1,32 @@
+{
+    "functions": [
+        {
+            "name": "my-message-generator",
+            "class_specification": {
+                "id": "message_generator",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "../../functions/message_generator/message_generator.wasm",
+                "outputs": []
+            },
+            "output_mapping": {
+                "output": "my-log"
+            },
+            "annotations": {
+                "init-payload": "message=hello world,period=1000"
+            }
+        }
+    ],
+    "resources": [
+        {
+            "name": "my-log",
+            "class_type": "file-log",
+            "output_mapping": {},
+            "configurations": {
+                "filename": "my-local-file.log",
+                "add-timestamp": "true"
+            }
+        }
+    ],
+    "annotations": {}
+}

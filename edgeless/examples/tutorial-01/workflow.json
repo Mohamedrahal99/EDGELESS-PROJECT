@@ -1,0 +1,82 @@
+{
+    "functions": [
+        {
+            "name": "sensor_simulator",
+            "class_specification": {
+                "id": "sensor_simulator",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "../../functions/sensor_simulator/sensor_simulator.wasm",
+                "outputs": [
+                    "output"
+                ]
+            },
+            "output_mapping": {
+                "output": "filter_in_range"
+            },
+            "annotations": {
+                "init-payload": "period=100,min-value=-100,max-value=100,seed=42"
+            }
+        },
+        {
+            "name": "filter_in_range",
+            "class_specification": {
+                "id": "filter_in_range",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "../../functions/filter_in_range/filter_in_range.wasm",
+                "outputs": [
+                    "output",
+                    "error"
+                ]
+            },
+            "output_mapping": {
+                "output": "moving_avg",
+                "error": "file-log"
+            },
+            "annotations": {
+                "init-payload": "0.0,100.0"
+            }
+        },
+        {
+            "name": "moving_avg",
+            "class_specification": {
+                "id": "moving_avg",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "../../functions/moving_avg/moving_avg.wasm",
+                "outputs": [
+                    "output",
+                    "error"
+                ]
+            },
+            "output_mapping": {
+                "output": "redis",
+                "error": "file-log"
+            },
+            "annotations": {
+                "init-payload": "10"
+            }
+        }
+    ],
+    "resources": [
+        {
+            "name": "file-log",
+            "class_type": "file-log",
+            "output_mapping": {},
+            "configurations": {
+                "filename": "reading-errors.log"
+            }
+        },
+        {
+            "name": "redis",
+            "class_type": "redis",
+            "output_mapping": {},
+            "configurations": {
+                "url": "redis://127.0.0.1:6379/",
+                "key": "tutorial-01"
+            }
+        }
+    ],
+    "annotations": {}
+}
