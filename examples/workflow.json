@@ -1,0 +1,46 @@
+{
+  "functions": [
+    {
+      "name": "writer",
+      "class_specification": {
+        "id": "writer",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/writer/target/wasm32-unknown-unknown/release/writer.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {}
+    },
+    {
+      "name": "mem",
+      "class_specification": {
+        "id": "mem",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/mem/target/wasm32-unknown-unknown/release/mem.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "reader"
+      },
+      "annotations": {}
+    },
+    {
+      "name": "reader",
+      "class_specification": {
+        "id": "reader",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/reader/target/wasm32-unknown-unknown/release/reader.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {}
+    }
+  ],
+  "resources": [],
+  "annotations": {}
+}

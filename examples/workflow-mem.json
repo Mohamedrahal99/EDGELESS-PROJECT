@@ -1,0 +1,32 @@
+{
+  "functions": [
+    {
+      "name": "invoker",
+      "class_specification": {
+        "id": "invoker",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/invoker/target/wasm32-unknown-unknown/release/invoker.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {}
+    },
+    {
+      "name": "mem",
+      "class_specification": {
+        "id": "mem",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "../functions/mem/target/wasm32-unknown-unknown/release/mem.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {}
+    }
+  ],
+  "resources": [],
+  "annotations": {}
+}

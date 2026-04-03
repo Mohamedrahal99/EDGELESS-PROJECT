@@ -1,0 +1,37 @@
+{
+    "functions": [
+        {
+            "name": "test_fun",
+            "class_specification": {
+                "id": "esp_test_fun",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "../../functions/esp_test_fun/esp_test_fun.wasm",
+                "outputs": [
+                    "check_display"
+                ]
+            },
+            "output_mapping": {
+                "check_display": "test_display"
+            },
+            "annotations": {}
+        }
+    ],
+    "resources": [
+        {
+            "name": "test_sensor",
+            "class_type": "scd30-sensor",
+            "output_mapping": {
+                "data_out": "test_fun"
+            },
+            "configurations": {}
+        },
+        {
+            "name": "test_display",
+            "class_type": "epaper-display",
+            "output_mapping": {},
+            "configurations": {}
+        }
+    ],
+    "annotations": {}
+}
