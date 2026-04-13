@@ -65,7 +65,7 @@ for i in range(n):
 "out": "mem"
 },
 "annotations": {
-"init_payload": "fibonacci=50,key_space=100"
+"init_payload": "fibonacci=20,key_space=100,state_size=256,payload_size=1024"
 }
 })
 
@@ -81,7 +81,8 @@ functions.append({
 "outputs": []
 },
 "output_mapping": {},
-"annotations": {}
+"annotations": {"init_payload": "state_size=256"
+}
 })
 
 workflow = {

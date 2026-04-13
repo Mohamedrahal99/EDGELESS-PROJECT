@@ -16,7 +16,7 @@ for file in files:
 
     f = int(m.group(1))
     p = float(m.group(2))
-    r = int(m.group(3))  # run id
+    r = int(m.group(3)) 
 
     try:
         df = pd.read_csv(file, header=None)
@@ -36,20 +36,21 @@ for file in files:
         index="function_id",
         columns="metric",
         values="value",
-        aggfunc="sum"
+        aggfunc="mean"
     )
 
     exec_time = pivot.get("function_execution_time", pd.Series(0, index=pivot.index))
     transfer_time = pivot.get("function_transfer_time", pd.Series(0, index=pivot.index))
 
     pivot["latency"] = exec_time + transfer_time
-
-    # 🔥 N = number of execution events
+    num_functions = pivot.shape[0]
+    # N = number of execution events
     N = len(df[df["metric"] == "function_execution_time"])
     if N == 0:
         continue
 
-    avg_latency = pivot["latency"].sum() / N
+    #avg_latency = pivot["latency"].sum() / (N / num_functions)
+    avg_latency = pivot["latency"].mean()
 
     rows.append({
         "f": f,

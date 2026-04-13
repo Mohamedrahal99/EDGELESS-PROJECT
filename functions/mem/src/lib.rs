@@ -3,7 +3,6 @@ use log::info;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// Global in-memory store (thread-safe)
 static STORE: OnceLock<Mutex<HashMap<String, String>>> =
     OnceLock::new();
 
@@ -11,62 +10,89 @@ struct Mem;
 
 impl EdgeFunction for Mem {
 
-    // --------------------------------------------------
-    // Main logic: handle CAST messages
-    // --------------------------------------------------
     fn handle_cast(src: InstanceId, msg: &[u8]) {
 
-        let payload = match core::str::from_utf8(msg) {
+        let raw = match core::str::from_utf8(msg) {
             Ok(v) => v.trim(),
             Err(_) => {
-                info!("MEM → Invalid UTF-8 message");
+                info!("MEM → Invalid UTF-8");
                 return;
             }
         };
+
+        // 🔥 DEBUG (very important)
+        info!("MEM RAW = {:?}", raw);
+
+        // 🔥 split command | payload
+        let mut split = raw.splitn(2, '|');
+        let command = split.next().unwrap_or("");
+        let payload_fragment = split.next().unwrap_or("");
+
+        info!("MEM COMMAND = {:?}", command);
+        info!("MEM PAYLOAD SIZE = {}", payload_fragment.len());
 
         let store =
             STORE.get_or_init(|| Mutex::new(HashMap::new()));
 
         // =========================
-        // WRITE: write(k:v)
+        // WRITE: write(k:v)|payload
         // =========================
-        if payload.starts_with("write(")
-            && payload.ends_with(")")
+        if let Some(inner) = command
+            .strip_prefix("write(")
+            .and_then(|s| s.strip_suffix(")"))
         {
-            let inner = &payload[6..payload.len() - 1];
-            let mut parts = inner.split(':');
+            let mut parts = inner.splitn(2, ':');
 
             if let (Some(k), Some(v)) =
                 (parts.next(), parts.next())
             {
                 let mut map = store.lock().unwrap();
-                map.insert(k.to_string(), v.to_string());
 
-                info!("MEM WRITE → {} = {}", k, v);
+                map.insert(k.to_string(), payload_fragment.to_string());
 
-                // Reply to caller
-                let reply =
-                    format!("ack_write({}:{})", k, v);
+                info!(
+                    "MEM WRITE → key={} value={} payload_size={}",
+                    k,
+                    v,
+                    payload_fragment.len()
+                );
 
+                let reply = format!("ack_write({}:{})", k, v);
                 cast_raw(src, reply.as_bytes());
+            } else {
+                info!("MEM WRITE → malformed inner: {:?}", inner);
             }
 
         // =========================
-        // READ: read(k)
+        // READ: read(k)|payload
         // =========================
-        } else if payload.starts_with("read(")
-            && payload.ends_with(")")
+        } else if let Some(key) = command
+            .strip_prefix("read(")
+            .and_then(|s| s.strip_suffix(")"))
         {
-            let key = &payload[5..payload.len() - 1];
+            let mut map = store.lock().unwrap();
 
-            let map = store.lock().unwrap();
+            let value = if let Some(v) = map.get(key) {
+                v.clone()
+            } else {
+                let generated = generate_payload(payload_fragment.len());
 
-            let value = map
-                .get(key)
-                .cloned()
-                .unwrap_or_else(|| "NULL".to_string());
+                map.insert(key.to_string(), generated.clone());
 
-            info!("MEM READ → {} = {}", key, value);
+                info!(
+                    "MEM MISS → key={} generated_size={}",
+                    key,
+                    generated.len()
+                );
+
+                generated
+            };
+
+            info!(
+                "MEM READ → key={} stored_size={}",
+                key,
+                value.len()
+            );
 
             let reply =
                 format!("read_result({}:{})", key, value);
@@ -77,11 +103,10 @@ impl EdgeFunction for Mem {
         // UNKNOWN
         // =========================
         } else {
-            info!("MEM → Unknown command: {}", payload);
+            info!("MEM → Unknown command: {:?}", raw);
         }
     }
 
-    // --------------------------------------------------
     fn handle_call(
         _src: InstanceId,
         _msg: &[u8]
@@ -89,20 +114,27 @@ impl EdgeFunction for Mem {
         CallRet::NoReply
     }
 
-    // --------------------------------------------------
     fn handle_init(
         _init_message: Option<&[u8]>,
         _state: Option<&[u8]>
     ) {
         edgeless_function::init_logger();
+
         STORE.get_or_init(|| Mutex::new(HashMap::new()));
+
+        // 🔥 version marker (super important)
+        info!("MEM VERSION = FINAL_V1");
+
         info!("MEM initialized");
     }
 
-    // --------------------------------------------------
     fn handle_stop() {
         info!("MEM stopped");
     }
 }
 
 edgeless_function::export!(Mem);
+
+fn generate_payload(size: usize) -> String {
+    "S".repeat(size)
+}
