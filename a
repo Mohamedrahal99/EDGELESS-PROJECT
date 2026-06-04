@@ -1,0 +1,11 @@
+[0;1;32m●[0m edgeless-orc.service - Edgeless Orchestrator
+     Loaded: loaded (]8;;file://mohamed-1/etc/systemd/system/edgeless-orc.service/etc/systemd/system/edgeless-orc.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Wed 2026-04-29 20:35:19 UTC; 13s ago
+   Main PID: 457138 (edgeless_orc_d)
+      Tasks: 9 (limit: 629145)
+     Memory: 5.9M (peak: 6.1M)
+        CPU: 18ms
+     CGroup: /system.slice/edgeless-orc.service
+             └─[0;38;5;245m457138 /home/EDGELESS-PROJECT/target/release/edgeless_orc_d -c /home/EDGELESS-PROJECT/orchestrator.toml[0m
+
+Apr 29 20:35:19 mohamed-1 systemd[1]: Started edgeless-orc.service - Edgeless Orchestrator.

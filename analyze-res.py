@@ -4,7 +4,7 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 
-files = glob.glob("res/*.csv")
+files = glob.glob("results/*.csv")
 
 rows = []
 
@@ -36,21 +36,23 @@ for file in files:
         index="function_id",
         columns="metric",
         values="value",
-        aggfunc="sum"
+        aggfunc="mean"
     )
-
+    #print(pivot)
     exec_time = pivot.get("function_execution_time", pd.Series(0, index=pivot.index))
     transfer_time = pivot.get("function_transfer_time", pd.Series(0, index=pivot.index))
 
     pivot["latency"] = exec_time + transfer_time
-
-    # 🔥 N = number of execution events
+    num_functions = pivot.shape[0]
+    print("number of unique functions:",num_functions)
+    #  N = number of execution events
     N = len(df[df["metric"] == "function_execution_time"])
     if N == 0:
         continue
 
-    avg_latency = pivot["latency"].sum() / N
-
+    avg_latency = pivot["latency"].sum() / ( N / num_functions)
+    #avg_latency = pivot["latency"].mean()
+    print(avg_latency)
     rows.append({
         "f": f,
         "p": p,
@@ -84,7 +86,10 @@ summary.to_csv("summary_with_ci.csv", index=False)
 
 print("\n✅ Summary with CI:")
 print(summary)
-
+#print(f"N (executions): {N}")
+#print(f"num_functions: {num_functions}")
+#print(f"avg executions per function: {N / num_functions}")
+#print(f"sum latency: {pivot['latency'].sum()}")
 # =============================
 # 📊 PLOT
 # =============================
@@ -125,3 +130,5 @@ plt.legend(title="Write Probability")
 plt.tight_layout()
 plt.savefig("latency_with_ci.png", dpi=400)
 plt.show()
+plt.savefig("output-state.png")
+print("Plot saved as output.png")

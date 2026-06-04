@@ -58,9 +58,9 @@ impl EdgeFunction for Writer {
 
         let period_ms =
             args.get("period")
-                .unwrap_or(&"1000")
+                .unwrap_or(&"100")
                 .parse::<u64>()
-                .unwrap_or(1000);
+                .unwrap_or(100);
 
         let _ = CONF.set(Conf { period_ms });
 

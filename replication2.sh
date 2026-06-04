@@ -8,7 +8,7 @@ P_VALUES=(0 0.5 1)
 REPS=10
 DURATION=30
 
-OUTDIR="res"
+OUTDIR="results"
 METRIC_FILE="dataset/performance_samples.csv"
 
 mkdir -p "$OUTDIR"

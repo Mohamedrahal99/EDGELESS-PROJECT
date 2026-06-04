@@ -1,0 +1,143 @@
+import pandas as pd
+import glob
+import re
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =============================
+# ⚙️ CONFIG
+# =============================
+
+DATA_PATH = "results/f*_r*_app.csv"
+OUTPUT_PLOT = "throughput_total.png"
+OUTPUT_SUMMARY = "throughput_total_summary.csv"
+
+# =============================
+# 📂 LOAD FILES
+# =============================
+
+files = glob.glob(DATA_PATH)
+
+rows = []
+
+for file in files:
+
+    m = re.search(r"f(\d+)_r(\d+)_app\.csv", file)
+    if not m:
+        continue
+
+    f = int(m.group(1))
+    r = int(m.group(2))
+
+    try:
+        df = pd.read_csv(file)
+    except:
+        continue
+
+    if df.empty:
+        continue
+
+    # =============================
+    # 🧠 Extract tbegin / tend
+    # =============================
+
+    tbegin = df[df["target"] == "tbegin"].groupby("identifier")["timestamp"].min()
+    tend   = df[df["target"] == "tend"].groupby("identifier")["timestamp"].max()
+
+    common_ids = tbegin.index.intersection(tend.index)
+
+    if len(common_ids) == 0:
+        continue
+
+    tbegin = tbegin.loc[common_ids]
+    tend   = tend.loc[common_ids]
+
+    # =============================
+    # 📊 Compute throughput
+    # =============================
+
+    total_time = tend.max() - tbegin.min()
+    num_requests = len(common_ids)
+
+    if total_time <= 0:
+        continue
+
+    throughput = num_requests / total_time  # ops/sec
+
+    rows.append({
+        "f": f,
+        "run": r,
+        "throughput": throughput
+    })
+
+# =============================
+# 📊 BUILD DATAFRAME
+# =============================
+
+df = pd.DataFrame(rows)
+
+if df.empty:
+    print("❌ No throughput data found")
+    exit()
+
+# =============================
+# 📊 STATISTICS
+# =============================
+
+summary = df.groupby("f").agg(
+    mean=("throughput", "mean"),
+    std=("throughput", "std"),
+    n=("throughput", "count")
+).reset_index()
+
+summary["ci95"] = 1.96 * (summary["std"] / np.sqrt(summary["n"]))
+
+summary.to_csv(OUTPUT_SUMMARY, index=False)
+
+print("\n✅ Throughput Summary:")
+print(summary)
+
+# =============================
+# 📈 PLOT
+# =============================
+
+plt.figure(figsize=(10,6))
+
+x = summary["f"]
+y = summary["mean"]
+yerr = summary["ci95"]
+
+plt.plot(x, y, marker="o", linewidth=3)
+plt.errorbar(x, y, yerr=yerr, fmt="none", capsize=5)
+
+# Optional: shaded CI
+lower = np.maximum(0, y - yerr)
+upper = y + yerr
+plt.fill_between(x, lower, upper, alpha=0.2)
+
+plt.xlabel("Number of Functions (f)")
+plt.ylabel("Throughput (ops/sec)")
+plt.title("Throughput vs Workflow Size")
+
+plt.grid(True, linestyle="--", alpha=0.6)
+
+plt.tight_layout()
+plt.savefig(OUTPUT_PLOT, dpi=400)
+plt.show()
+
+# =============================
+# 🔍 INSIGHTS
+# =============================
+
+print("\n🔍 Throughput trend:")
+
+for i in range(len(summary)):
+    print(f"f={summary['f'][i]} → {summary['mean'][i]:.2f} ops/sec")
+
+# Detect peak / drop
+peak = summary.loc[summary["mean"].idxmax()]
+
+print(f"\n🔥 Peak throughput at f={int(peak['f'])}: {peak['mean']:.2f} ops/sec")
+
+if summary["mean"].iloc[-1] < peak["mean"]:
+    print("⚠️ Throughput drops after peak → system saturation")

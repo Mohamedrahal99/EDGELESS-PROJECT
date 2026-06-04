@@ -1,0 +1,36 @@
+{
+  "functions": [
+    {
+      "name": "writer",
+      "class_specification": {
+        "id": "writer",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/writer/target/wasm32-unknown-unknown/release/writer.wasm",
+        "outputs": ["out"]
+      },
+      "output_mapping": {
+        "out": "lambda_fn"
+      },
+      "annotations": {
+        "init_payload": "period=100"
+      }
+    },
+    {
+      "name": "lambda_fn",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {
+        "init_payload": "fibonacci=50000,key_space=1000,write_prob=0.5"
+      }
+    }
+  ],
+  "resources": [],
+  "annotations": {}
+}

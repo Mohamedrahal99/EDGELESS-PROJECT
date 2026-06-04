@@ -1,0 +1,40 @@
+{
+    "functions": [
+        {
+            "name": "trigger",
+            "class_specification": {
+                "id": "trigger",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "functions/trigger/target/wasm32-unknown-unknown/release/trigger.wasm",
+                "outputs": [
+                    "out"
+                ]
+            },
+            "output_mapping": {
+                "out": "fibonacci"
+            },
+            "annotations": {
+                "init-payload": "out_type=constant,arrival=c(1000),value=42"
+            }
+        },
+        {
+            "name": "fibonacci",
+            "class_specification": {
+                "id": "bench_process",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "functions/bench_process/target/wasm32-unknown-unknown/release/bench_process.wasm",
+                "outputs": [
+                    "out"
+                ]
+            },
+            "output_mapping": {},
+            "annotations": {
+                "init-payload": "fibonacci=100000"
+            }
+        }
+    ],
+    "resources": [],
+    "annotations": {}
+}

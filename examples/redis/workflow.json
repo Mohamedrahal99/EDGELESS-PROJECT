@@ -6,7 +6,7 @@
                 "id": "counter",
                 "function_type": "RUST_WASM",
                 "version": "0.2",
-                "code": "../../functions/counter/counter.wasm",
+                "code": "/home/EDGELESS-PROJECT/functions/counter/target/wasm32-unknown-unknown/debug/counter.wasm",
                 "outputs": []
             },
             "output_mapping": {

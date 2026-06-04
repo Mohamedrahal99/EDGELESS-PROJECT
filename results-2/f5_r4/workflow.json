@@ -1,0 +1,161 @@
+{
+  "functions": [
+    {
+      "name": "writer",
+      "class_specification": {
+        "id": "writer",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/writer/target/wasm32-unknown-unknown/release/writer.wasm",
+        "outputs": [
+          "out"
+        ]
+      },
+      "output_mapping": {
+        "out": "multiplex"
+      },
+      "annotations": {
+        "init_payload": "period=100",
+        "label_match_all": "hostname=mohamed-1"
+      }
+    },
+    {
+      "name": "multiplex",
+      "class_specification": {
+        "id": "multiplex",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/multiplex/target/wasm32-unknown-unknown/release/multiplex.wasm",
+        "outputs": [
+          "out0",
+          "out1",
+          "out2",
+          "out3",
+          "out4"
+        ]
+      },
+      "output_mapping": {
+        "out0": "lambda0",
+        "out1": "lambda1",
+        "out2": "lambda2",
+        "out3": "lambda3",
+        "out4": "lambda4"
+      },
+      "annotations": {
+        "init_payload": "num_outputs=5",
+        "label_match_all": "hostname=mohamed-1"
+      }
+    },
+    {
+      "name": "lambda0",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": [
+          "out"
+        ]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=1,key_space=1000,write_prob=0.5",
+        "label_match_all": "hostname=rpi-02"
+      }
+    },
+    {
+      "name": "lambda1",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": [
+          "out"
+        ]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=1,key_space=1000,write_prob=0.5",
+        "label_match_all": "hostname=rpi-03"
+      }
+    },
+    {
+      "name": "lambda2",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": [
+          "out"
+        ]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=1,key_space=1000,write_prob=0.5",
+        "label_match_all": "hostname=rpi-02"
+      }
+    },
+    {
+      "name": "lambda3",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": [
+          "out"
+        ]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=1,key_space=1000,write_prob=0.5",
+        "label_match_all": "hostname=rpi-03"
+      }
+    },
+    {
+      "name": "lambda4",
+      "class_specification": {
+        "id": "lambda",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/lambda/target/wasm32-unknown-unknown/release/lambda.wasm",
+        "outputs": [
+          "out"
+        ]
+      },
+      "output_mapping": {
+        "out": "mem"
+      },
+      "annotations": {
+        "init_payload": "fibonacci=1,key_space=1000,write_prob=0.5",
+        "label_match_all": "hostname=rpi-02"
+      }
+    },
+    {
+      "name": "mem",
+      "class_specification": {
+        "id": "mem",
+        "function_type": "RUST_WASM",
+        "version": "0.1",
+        "code": "functions/mem/target/wasm32-unknown-unknown/release/mem.wasm",
+        "outputs": []
+      },
+      "output_mapping": {},
+      "annotations": {
+        "label_match_all": "hostname=mohamed-1"
+      }
+    }
+  ],
+  "resources": [],
+  "annotations": {}
+}
