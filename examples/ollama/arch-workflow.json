@@ -1,0 +1,51 @@
+{
+    "functions": [
+        {
+            "name": "conversation_mem",
+            "class_specification": {
+                "id": "conversation_mem",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "/home/EDGELESS-PROJECT/functions/convmem/conversation_mem.wasm",
+                "outputs": ["llm", "egress", "metrics"]
+            },
+            "output_mapping": {
+                "llm": "ollama",
+                "egress": "file-log",
+                "metrics": "metrics-redis"
+            },
+            "annotations": {}
+        }
+    ],
+    "resources": [
+        {
+            "name": "http-ingress",
+            "class_type": "http-ingress",
+            "output_mapping": { "new_request": "conversation_mem" },
+            "configurations": {
+                "host": "demo.edgeless.com",
+                "methods": "POST",
+                "async": "true"
+            }
+        },
+        {
+            "name": "ollama",
+            "class_type": "ollama",
+            "output_mapping": { "out": "conversation_mem" },
+            "configurations": { "model": "llama3.2-3b-fixed" }
+        },
+        {
+            "name": "file-log",
+            "class_type": "file-log",
+            "output_mapping": {},
+            "configurations": { "filename": "arch2.log", "add-timestamp": "true" }
+        },
+        {
+            "name": "metrics-redis",
+            "class_type": "redis",
+            "output_mapping": {},
+            "configurations": { "url": "redis://127.0.0.1:6379", "key": "sao:session:default" }
+        }
+    ],
+    "annotations": {}
+}

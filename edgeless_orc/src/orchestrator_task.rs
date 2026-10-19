@@ -48,6 +48,11 @@ pub(crate) struct OrchestratorTask {
     //        value: lid (target function)
     dependency_graph: std::collections::HashMap<uuid::Uuid, std::collections::HashMap<String, uuid::Uuid>>,
     dependency_graph_changed: bool,
+    // Intelligent strategy: calibrated agent classes and policy parameters
+    intelligent: crate::intelligent::Params,
+    // Intelligent strategy: when each agent (workflow) was first placed, so
+    // that the growth of its conversation state can be accounted for
+    agent_since: std::collections::HashMap<String, std::time::Instant>,
 }
 
 impl OrchestratorTask {
@@ -69,6 +74,12 @@ impl OrchestratorTask {
             active_instances_changed: false,
             dependency_graph: std::collections::HashMap::new(),
             dependency_graph_changed: false,
+            intelligent: {
+                let p = crate::intelligent::Params::from_env();
+                log::info!("Intelligent placement parameters: {:?}", p);
+                p
+            },
+            agent_since: std::collections::HashMap::new(),
         }
     }
 
@@ -384,10 +395,127 @@ impl OrchestratorTask {
         // Find all resource providers that can start this resource.
         let matching_providers = self.feasible_providers(&resource_req);
 
-        // Select one provider at random.
-        match matching_providers.choose(&mut self.rng) {
+        // A sticky group that is already anchored is a HARD constraint and is
+        // applied before any strategy: the resource may only go to an anchor
+        // node that also offers the required provider, or the deployment fails.
+        let workflow_id = Self::workflow_id_of_resource(&resource_req);
+        let sticky_group = Self::sticky_group_of_resource(&resource_req);
+        let sticky_nodes: Option<Vec<uuid::Uuid>> = match (&workflow_id, &sticky_group) {
+            (Some(wf), Some(group)) => {
+                let anchors = self.sticky_group_nodes(wf, group);
+                if anchors.is_empty() { None } else { Some(anchors) }
+            }
+            _ => None,
+        };
+
+        if let Some(anchors) = &sticky_nodes {
+            let mut provider_nodes: Vec<uuid::Uuid> = matching_providers
+                .iter()
+                .filter_map(|p| self.resource_providers.get(p).map(|rp| rp.node_id))
+                .collect();
+            provider_nodes.sort();
+            provider_nodes.dedup();
+
+            return match self.orchestration_logic.next_resource_sticky(&provider_nodes, anchors) {
+                Some(node_id) => {
+                    log::info!(
+                        "Placement: resource {} -> node {} (workflow {}, sticky '{}' anchored on {} node(s))",
+                        resource_req.class_type,
+                        node_id,
+                        workflow_id.clone().unwrap_or_else(|| "?".to_string()),
+                        sticky_group.clone().unwrap_or_default(),
+                        anchors.len()
+                    );
+                    match matching_providers
+                        .iter()
+                        .find(|p| self.resource_providers.get(*p).map(|rp| rp.node_id) == Some(node_id))
+                        .cloned()
+                    {
+                        Some(_provider_id) => self.start_resource_in_node(resource_req, &lid, &node_id).await,
+                        None => Ok(edgeless_api::common::StartComponentResponse::ResponseError(
+                            edgeless_api::common::ResponseError {
+                                summary: "sticky constraint violated".to_string(),
+                                detail: Some(format!("no provider found on anchor node {}", node_id)),
+                            },
+                        )),
+                    }
+                }
+                None => Ok(edgeless_api::common::StartComponentResponse::ResponseError(
+                    edgeless_api::common::ResponseError {
+                        summary: "sticky constraint violated".to_string(),
+                        detail: Some(format!(
+                            "resource '{}' of workflow {} carries sticky='{}', whose other components are \
+                             already deployed on node(s) {:?}; none of them offers a '{}' provider. \
+                             Deployment refused (the constraint is not a preference).",
+                            resource_req.class_type,
+                            workflow_id.unwrap_or_else(|| "?".to_string()),
+                            sticky_group.unwrap_or_default(),
+                            anchors,
+                            resource_req.class_type
+                        )),
+                    },
+                )),
+            };
+        }
+
+        // Intelligent strategy: an agent's LLM resource goes where the agent
+        // was placed (the decision was taken with its function), or is placed
+        // now by the predictive rule if the function has not been placed yet;
+        // any other component follows its workflow when a provider is there.
+        if self.orchestration_logic.is_agent_aware() {
+            if let Some(node_id) = self.intelligent_resource_node(&resource_req, &matching_providers) {
+                log::info!(
+                    "Placement: resource {} -> node {} (workflow {}, intelligent)",
+                    resource_req.class_type,
+                    node_id,
+                    Self::workflow_id_of_resource(&resource_req).unwrap_or_else(|| "?".to_string())
+                );
+                return self.start_resource_in_node(resource_req, &lid, &node_id).await;
+            }
+        }
+
+        // No sticky constraint (or the group is not yet anchored): fall back to
+        // the configured strategy. Under RandomNode, prefer a node that already
+        // hosts another component of the same workflow (co-location), falling
+        // back to a random capable node. The other strategies keep choosing a
+        // provider uniformly at random.
+        let chosen_provider: Option<String> = if self.orchestration_logic.is_random_node() {
+            let same_workflow_nodes = match Self::workflow_id_of_resource(&resource_req) {
+                Some(wf) => self.same_workflow_nodes(&wf),
+                None => vec![],
+            };
+            let mut provider_nodes: Vec<uuid::Uuid> = matching_providers
+                .iter()
+                .filter_map(|p| self.resource_providers.get(p).map(|rp| rp.node_id))
+                .collect();
+            provider_nodes.sort();
+            provider_nodes.dedup();
+            let chosen_node = self
+                .orchestration_logic
+                .next_resource_random_node(&provider_nodes, &same_workflow_nodes);
+            match chosen_node {
+                Some(node_id) => {
+                    log::info!(
+                        "Placement: resource {} -> node {} (workflow {}, same-workflow nodes: {})",
+                        resource_req.class_type,
+                        node_id,
+                        Self::workflow_id_of_resource(&resource_req).unwrap_or_else(|| "?".to_string()),
+                        same_workflow_nodes.len()
+                    );
+                    matching_providers
+                        .iter()
+                        .find(|p| self.resource_providers.get(*p).map(|rp| rp.node_id) == Some(node_id))
+                        .cloned()
+                }
+                None => None,
+            }
+        } else {
+            matching_providers.choose(&mut self.rng).cloned()
+        };
+
+        match chosen_provider {
             Some(provider_id) => {
-                let resource_provider = self.resource_providers.get(provider_id).unwrap();
+                let resource_provider = self.resource_providers.get(&provider_id).unwrap();
                 let node_id = resource_provider.node_id;
                 self.start_resource_in_node(resource_req, &lid, &node_id).await
             }
@@ -477,10 +605,370 @@ impl OrchestratorTask {
         &mut self,
         spawn_req: &edgeless_api::function_instance::SpawnFunctionRequest,
     ) -> anyhow::Result<edgeless_api::function_instance::NodeId> {
-        match self.orchestration_logic.next(spawn_req) {
-            Some(node_id) => Ok(node_id),
-            None => Err(anyhow::anyhow!("no valid node found")),
+        let workflow_id = Self::workflow_id_of_function(spawn_req);
+        let sticky_group = Self::sticky_group_of_function(spawn_req);
+
+        // Nodes already hosting another component of the same workflow,
+        // used by the RandomNode strategy for co-location (a preference).
+        let same_workflow_nodes = match &workflow_id {
+            Some(wf) => self.same_workflow_nodes(wf),
+            None => vec![],
+        };
+
+        // Nodes already hosting another component of the same STICKY GROUP.
+        // Unlike the above this is a hard constraint: see sticky_group_nodes().
+        let sticky_nodes: Option<Vec<uuid::Uuid>> = match (&workflow_id, &sticky_group) {
+            (Some(wf), Some(group)) => {
+                let anchors = self.sticky_group_nodes(wf, group);
+                if anchors.is_empty() { None } else { Some(anchors) }
+            }
+            _ => None,
+        };
+
+        // Intelligent strategy: a function that declares an agent class is
+        // placed by the predictive rule, on a node that can also host its LLM
+        // resource, so that the resource can follow it. Sticky anchors, when
+        // present, restrict the candidates as for every other strategy. If no
+        // such node exists the configured fallback below applies.
+        if self.orchestration_logic.is_agent_aware() {
+            let profile = self.intelligent.profile_from(&spawn_req.annotations);
+            if let (Some(wf), Some(prof)) = (workflow_id.clone(), profile) {
+                let all: Vec<uuid::Uuid> = self.nodes.keys().cloned().collect();
+                let llm = self.llm_nodes();
+                let mut allowed: Vec<uuid::Uuid> = self
+                    .orchestration_logic
+                    .feasible_nodes(spawn_req, &all)
+                    .into_iter()
+                    .filter(|n| llm.contains(n))
+                    .collect();
+                if let Some(anchors) = &sticky_nodes {
+                    allowed.retain(|n| anchors.contains(n));
+                }
+                if !allowed.is_empty() {
+                    let what = format!("function {}", spawn_req.spec.to_short_string());
+                    if let Some(node_id) = self.intelligent_pick(&wf, prof, allowed, &what) {
+                        return Ok(node_id);
+                    }
+                }
+            }
         }
+
+        match self.orchestration_logic.next(spawn_req, &same_workflow_nodes, sticky_nodes.as_deref()) {
+            Some(node_id) => {
+                log::info!(
+                    "Placement: function {} -> node {} (workflow {}, same-workflow nodes: {}{})",
+                    spawn_req.spec.to_short_string(),
+                    node_id,
+                    workflow_id.clone().unwrap_or_else(|| "?".to_string()),
+                    same_workflow_nodes.len(),
+                    match &sticky_group {
+                        Some(g) => format!(", sticky '{}' anchored on {}", g,
+                                           sticky_nodes.as_ref().map_or(0, |v| v.len())),
+                        None => String::new(),
+                    }
+                );
+                Ok(node_id)
+            }
+            None => match (&sticky_group, &sticky_nodes) {
+                (Some(group), Some(anchors)) => Err(anyhow::anyhow!(
+                    "sticky constraint violated: component '{}' of workflow {} carries sticky='{}', \
+                     whose other components are already deployed on node(s) {:?}; none of them can \
+                     host this component. Deployment refused (the constraint is not a preference).",
+                    spawn_req.spec.to_short_string(),
+                    workflow_id.unwrap_or_else(|| "?".to_string()),
+                    group,
+                    anchors
+                )),
+                _ => Err(anyhow::anyhow!("no valid node found")),
+            },
+        }
+    }
+
+    /// Sticky group of a function, from the `sticky` annotation.
+    ///
+    /// Components of the same workflow carrying the same value MUST be placed
+    /// on one node. Components with no `sticky` annotation are unconstrained.
+    /// The value is an arbitrary label, so a workflow can define several
+    /// independent groups (e.g. `sticky=llm_side` on the function and the LLM
+    /// resource, `sticky=io_side` on ingress and poster).
+    fn sticky_group_of_function(spawn_req: &edgeless_api::function_instance::SpawnFunctionRequest) -> Option<String> {
+        spawn_req.annotations.get("sticky").filter(|s| !s.is_empty()).cloned()
+    }
+
+    /// Sticky group of a resource, from the `sticky` configuration key.
+    fn sticky_group_of_resource(resource_req: &edgeless_api::resource_configuration::ResourceInstanceSpecification) -> Option<String> {
+        resource_req.configuration.get("sticky").filter(|s| !s.is_empty()).cloned()
+    }
+
+    /// Nodes that already host a component of the given workflow belonging to
+    /// the given sticky group. Empty means the group is not yet anchored, so
+    /// this component is free to be placed anywhere feasible and becomes the
+    /// anchor for the ones that follow.
+    fn sticky_group_nodes(&self, workflow_id: &str, group: &str) -> Vec<uuid::Uuid> {
+        let mut nodes = vec![];
+        for instance in self.active_instances.values() {
+            match instance {
+                crate::active_instance::ActiveInstance::Function(req, instances) => {
+                    if Self::workflow_id_of_function(req).as_deref() == Some(workflow_id)
+                        && Self::sticky_group_of_function(req).as_deref() == Some(group)
+                    {
+                        nodes.extend(instances.iter().map(|i| i.node_id));
+                    }
+                }
+                crate::active_instance::ActiveInstance::Resource(req, instance) => {
+                    if !instance.is_none()
+                        && Self::workflow_id_of_resource(req).as_deref() == Some(workflow_id)
+                        && Self::sticky_group_of_resource(req).as_deref() == Some(group)
+                    {
+                        nodes.push(instance.node_id);
+                    }
+                }
+            }
+        }
+        nodes.sort();
+        nodes.dedup();
+        nodes
+    }
+
+    /// Workflow to which a function belongs (empty id = unknown).
+    fn workflow_id_of_function(spawn_req: &edgeless_api::function_instance::SpawnFunctionRequest) -> Option<String> {
+        if spawn_req.workflow_id.is_empty() {
+            None
+        } else {
+            Some(spawn_req.workflow_id.clone())
+        }
+    }
+
+    /// Workflow to which a resource belongs (empty id = unknown).
+    fn workflow_id_of_resource(resource_req: &edgeless_api::resource_configuration::ResourceInstanceSpecification) -> Option<String> {
+        if resource_req.workflow_id.is_empty() {
+            None
+        } else {
+            Some(resource_req.workflow_id.clone())
+        }
+    }
+
+    // ======================================================================
+    // Intelligent strategy (see intelligent.rs for the model and the rule)
+    // ======================================================================
+
+    /// Nodes that offer the LLM resource class and are not cordoned.
+    fn llm_nodes(&self) -> Vec<uuid::Uuid> {
+        let llm = &self.intelligent.llm_class_type;
+        let mut v: Vec<uuid::Uuid> = self
+            .resource_providers
+            .values()
+            .filter(|rp| &rp.class_type == llm)
+            .filter(|rp| self.nodes.get(&rp.node_id).map_or(false, |d| !d.cordoned))
+            .map(|rp| rp.node_id)
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Every active agent, as workflow -> (node, declared profile).
+    ///
+    /// An agent's node is where its LLM resource runs, since that is the node
+    /// whose inference slot it loads; until the resource is placed, the node of
+    /// its function stands in for it. The profile comes from whichever of the
+    /// workflow's components declares one (the driver stamps `agent_class` on
+    /// all of them).
+    fn agent_anchors(&self) -> std::collections::HashMap<String, (uuid::Uuid, crate::intelligent::AgentProfile)> {
+        let llm = &self.intelligent.llm_class_type;
+        let mut node_of: std::collections::HashMap<String, (uuid::Uuid, u8)> = std::collections::HashMap::new();
+        let mut profile_of: std::collections::HashMap<String, crate::intelligent::AgentProfile> = std::collections::HashMap::new();
+        for inst in self.active_instances.values() {
+            let (wf, prof, node, prio) = match inst {
+                crate::active_instance::ActiveInstance::Function(req, instances) => {
+                    let node = match instances.first() {
+                        Some(i) => i.node_id,
+                        None => continue,
+                    };
+                    (Self::workflow_id_of_function(req), self.intelligent.profile_from(&req.annotations), node, 1u8)
+                }
+                crate::active_instance::ActiveInstance::Resource(req, instance) => {
+                    if instance.is_none() {
+                        continue;
+                    }
+                    let prio = if &req.class_type == llm { 2u8 } else { 0u8 };
+                    (Self::workflow_id_of_resource(req), self.intelligent.profile_from(&req.configuration), instance.node_id, prio)
+                }
+            };
+            let wf = match wf {
+                Some(w) => w,
+                None => continue,
+            };
+            if let Some(p) = prof {
+                profile_of.entry(wf.clone()).or_insert(p);
+            }
+            if prio > 0 {
+                let e = node_of.entry(wf).or_insert((node, prio));
+                if prio > e.1 {
+                    *e = (node, prio);
+                }
+            }
+        }
+        node_of
+            .into_iter()
+            .filter_map(|(wf, (node, _))| profile_of.get(&wf).map(|p| (wf.clone(), (node, *p))))
+            .collect()
+    }
+
+    /// Candidates for the predictive rule: the allowed nodes with the agents
+    /// already anchored on them (aged by the time since they were placed), and
+    /// the largest predicted cycle time on the other nodes, which the decision
+    /// cannot change but which bounds the campaign length.
+    fn intelligent_candidates(
+        &self,
+        allowed: &[uuid::Uuid],
+        exclude_wf: &str,
+    ) -> (Vec<crate::intelligent::Candidate<uuid::Uuid>>, f64) {
+        let mut per_node: std::collections::HashMap<uuid::Uuid, Vec<crate::intelligent::Agent>> =
+            std::collections::HashMap::new();
+        for (wf, (node, prof)) in self.agent_anchors() {
+            if wf == exclude_wf {
+                continue;
+            }
+            let age = self.agent_since.get(&wf).map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+            per_node.entry(node).or_default().push(prof.agent(age));
+        }
+        // Reference compute for normalisation: the largest cores x clock among
+        // the candidate nodes. Each node's capacity is its own cores x clock
+        // over that reference (so the fastest node is 1.0), unless a `capacity=`
+        // label overrides it (e.g. a measured throughput ratio).
+        let raw = |n: &uuid::Uuid| -> f64 {
+            self.nodes.get(n).map_or(1.0, |d| {
+                let c = d.capabilities.num_cores.max(d.capabilities.num_cpus) as f64;
+                (c * d.capabilities.clock_freq_cpu as f64).max(1.0)
+            })
+        };
+        let reference = allowed.iter().map(raw).fold(1.0_f64, f64::max);
+        let mut candidates = vec![];
+        for node in allowed {
+            let labels = self.nodes.get(node).map(|d| d.capabilities.labels.clone()).unwrap_or_default();
+            let capacity = crate::intelligent::label_f64(&labels, "capacity")
+                .unwrap_or(raw(node) / reference)
+                .clamp(0.05, 1.0);
+            candidates.push(crate::intelligent::Candidate {
+                node: *node,
+                agents: per_node.remove(node).unwrap_or_default(),
+                static_power_mw: crate::intelligent::label_f64(&labels, "static_power_mw")
+                    .unwrap_or(self.intelligent.default_static_power_mw),
+                capacity,
+                max_agents: crate::intelligent::label_f64(&labels, "max_agents").map(|v| v.max(0.0) as usize),
+            });
+        }
+        let mut others: f64 = 0.0;
+        for agents in per_node.values() {
+            let p = crate::intelligent::predict(agents, self.intelligent.service_cv, self.intelligent.max_iterations);
+            others = others.max(p.max_cycle_s);
+        }
+        (candidates, others)
+    }
+
+    /// Run the predictive rule for one agent and record when it was placed.
+    fn intelligent_pick(
+        &mut self,
+        workflow_id: &str,
+        profile: crate::intelligent::AgentProfile,
+        mut allowed: Vec<uuid::Uuid>,
+        what: &str,
+    ) -> Option<uuid::Uuid> {
+        allowed.sort();
+        allowed.dedup();
+        // forget agents whose workflow no longer has anything running
+        let alive: std::collections::HashSet<String> = self.agent_anchors().into_keys().collect();
+        self.agent_since.retain(|wf, _| alive.contains(wf) || wf == workflow_id);
+
+        let (candidates, others) = self.intelligent_candidates(&allowed, workflow_id);
+        // The agent-aware strategies share every input - declared class,
+        // measured capacity, tie-breaks - and differ only in the cost function,
+        // so that the evaluation isolates what each ingredient adds.
+        // LL and CLL are the count-based rungs of the baseline ladder: they
+        // read neither the class nor (LL) the capacity of the arriving agent.
+        let arriving = profile.agent(0.0);
+        let decision = if self.orchestration_logic.is_weighted_least_loaded() {
+            crate::intelligent::choose_wll(&candidates, arriving, &self.intelligent)?
+        } else if self.orchestration_logic.is_capacity_least_loaded() {
+            crate::intelligent::choose_cll(&candidates, arriving, &self.intelligent)?
+        } else {
+            crate::intelligent::choose(&candidates, arriving, others, &self.intelligent)?
+        };
+        self.agent_since.entry(workflow_id.to_string()).or_insert_with(std::time::Instant::now);
+        log::info!(
+            "Placement: {} -> node {} (workflow {}, {}: predicted max cycle {:.1} s, best {:.1} s, \
+             delta slowdown {:.3}, own slowdown {:.2}, admissible {}/{})",
+            what,
+            decision.node,
+            workflow_id,
+            self.orchestration_logic.policy_label(),
+            decision.predicted_max_cycle_s,
+            decision.best_max_cycle_s,
+            decision.delta_slowdown,
+            decision.arriving_slowdown,
+            decision.admissible,
+            decision.considered
+        );
+        Some(decision.node)
+    }
+
+    /// Node for a resource under the Intelligent strategy, or None to fall back
+    /// to the default (random provider).
+    fn intelligent_resource_node(
+        &mut self,
+        resource_req: &edgeless_api::resource_configuration::ResourceInstanceSpecification,
+        matching_providers: &[String],
+    ) -> Option<uuid::Uuid> {
+        let wf = Self::workflow_id_of_resource(resource_req)?;
+        let mut provider_nodes: Vec<uuid::Uuid> = matching_providers
+            .iter()
+            .filter_map(|p| self.resource_providers.get(p).map(|rp| rp.node_id))
+            .collect();
+        provider_nodes.sort();
+        provider_nodes.dedup();
+        if provider_nodes.is_empty() {
+            return None;
+        }
+        // 1. the agent was already placed with its function: follow it
+        if let Some((node, _)) = self.agent_anchors().get(&wf) {
+            if provider_nodes.contains(node) {
+                return Some(*node);
+            }
+        }
+        // 2. an agent's LLM resource placed before its function: decide now
+        if resource_req.class_type == self.intelligent.llm_class_type {
+            if let Some(prof) = self.intelligent.profile_from(&resource_req.configuration) {
+                let what = format!("resource {}", resource_req.class_type);
+                return self.intelligent_pick(&wf, prof, provider_nodes, &what);
+            }
+        }
+        // 3. any other component: co-locate with its workflow when possible
+        let same = self.same_workflow_nodes(&wf);
+        provider_nodes.into_iter().find(|n| same.contains(n))
+    }
+
+    /// Nodes that currently host at least one component (function or
+    /// resource) of the given workflow. Used by the RandomNode strategy.
+    fn same_workflow_nodes(&self, workflow_id: &str) -> Vec<uuid::Uuid> {
+        let mut nodes = vec![];
+        for instance in self.active_instances.values() {
+            match instance {
+                crate::active_instance::ActiveInstance::Function(req, instances) => {
+                    if Self::workflow_id_of_function(req).as_deref() == Some(workflow_id) {
+                        nodes.extend(instances.iter().map(|i| i.node_id));
+                    }
+                }
+                crate::active_instance::ActiveInstance::Resource(req, instance) => {
+                    if !instance.is_none() && Self::workflow_id_of_resource(req).as_deref() == Some(workflow_id) {
+                        nodes.push(instance.node_id);
+                    }
+                }
+            }
+        }
+        nodes.sort();
+        nodes.dedup();
+        nodes
     }
 
     /// Start a new function instance on node assigned by orchestration's logic.

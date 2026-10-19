@@ -1,0 +1,24 @@
+{
+    "functions": [],
+    "resources": [
+        {
+            "name": "http-ingress",
+            "class_type": "http-ingress",
+            "output_mapping": { "new_request": "ollama" },
+            "configurations": { "host": "demo.edgeless.com", "methods": "POST", "async": "true" }
+        },
+        {
+            "name": "ollama",
+            "class_type": "ollama",
+            "output_mapping": { "out": "file-log" },
+            "configurations": { "model": "llama3.2-3b-fixed" }
+        },
+        {
+            "name": "file-log",
+            "class_type": "file-log",
+            "output_mapping": {},
+            "configurations": { "filename": "figA.log", "add-timestamp": "true" }
+        }
+    ],
+    "annotations": {}
+}

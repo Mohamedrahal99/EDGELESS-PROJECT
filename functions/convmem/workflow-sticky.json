@@ -1,0 +1,56 @@
+{
+    "functions": [
+        {
+            "name": "conversation_mem",
+            "class_specification": {
+                "id": "conversation_mem",
+                "function_type": "RUST_WASM",
+                "version": "0.1",
+                "code": "/home/EDGELESS-PROJECT/functions/convmem/conversation_mem.wasm",
+                "outputs": ["llm", "post", "self"]
+            },
+            "output_mapping": {
+                "llm": "ollama",
+                "post": "answer-poster",
+                "self": "conversation_mem"
+            },
+            "annotations": {
+                "init-payload": "llm_timeout_ms=600000",
+                "sticky": "all_together"
+            }
+        }
+    ],
+    "resources": [
+        {
+            "name": "http-ingress",
+            "class_type": "http-ingress",
+            "output_mapping": { "new_request": "conversation_mem" },
+            "configurations": {
+                "host": "demo.edgeless.com",
+                "methods": "POST",
+                "async": "true",
+                "wf_id": "true",
+                "sticky": "all_together"
+            }
+        },
+        {
+            "name": "ollama",
+            "class_type": "ollama",
+            "output_mapping": { "out": "conversation_mem" },
+            "configurations": {
+                "model": "llama3.2-3b-fixed",
+                "sticky": "all_together"
+            }
+        },
+        {
+            "name": "answer-poster",
+            "class_type": "http-poster",
+            "output_mapping": {},
+            "configurations": {
+                "url": "http://172.20.20.5:9000/answer",
+                "sticky": "all_together"
+            }
+        }
+    ],
+    "annotations": {}
+}

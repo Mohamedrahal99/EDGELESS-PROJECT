@@ -6,7 +6,7 @@
                 "id": "http_extractor",
                 "function_type": "RUST_WASM",
                 "version": "0.1",
-                "code": "../../functions/http_extractor/http_extractor.wasm",
+                "code": "/home/EDGELESS-PROJECT/functions/http_extractor/http_extractor.wasm",
                 "outputs": [
                     "out"
                 ]
@@ -36,7 +36,7 @@
                 "out": "file-log"
             },
             "configurations": {
-                "model": "llama3"
+                "model": "llama3.2-3b-fixed"
             }
         },
         {

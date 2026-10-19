@@ -19,7 +19,7 @@ pub mod proxy;
 pub mod proxy_none;
 pub mod proxy_redis;
 pub mod resource_provider;
-
+pub mod intelligent;
 use futures::join;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -91,13 +91,22 @@ impl Default for EdgelessOrcProxyDatasetSettings {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum OrchestrationStrategy {
     /// Random strategy utilizes a random number generator to select the worker
     /// node where a function instance is started. It is the default strategy.
     Random,
     /// RoundRobin traverses the list of available worker nodes in a fixed order
     /// and places new function instances according to this fixed order.
-    RoundRobin,
+    RoundRobin, 
+   
+    /// Co-locate all components of a workflow on one node; the first one random.
+    RandomNode,
+   
+    Intelligent,
+   
+    WeightedLeastLoaded,
+    CapacityLeastLoaded,
 }
 
 pub fn make_proxy(settings: EdgelessOrcProxySettings) -> std::sync::Arc<tokio::sync::Mutex<dyn proxy::Proxy>> {

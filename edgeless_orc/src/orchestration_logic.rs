@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: © 2023 Siemens AG
 // SPDX-License-Identifier: MIT
 
+use rand::Rng;
 use rand::SeedableRng;
 use rand::distributions::Distribution;
 
@@ -30,6 +31,21 @@ impl OrchestrationLogic {
         match orchestration_strategy {
             crate::OrchestrationStrategy::Random => log::info!("Orchestration logic strategy: random"),
             crate::OrchestrationStrategy::RoundRobin => log::info!("Orchestration logic strategy: round-robin"),
+            crate::OrchestrationStrategy::RandomNode => {
+                log::info!("Orchestration logic strategy: random-node (workflow co-location)")
+            }
+            crate::OrchestrationStrategy::Intelligent => {
+                log::info!("Orchestration logic strategy: CAP (class-aware predictive placement)")
+            }
+            crate::OrchestrationStrategy::WeightedLeastLoaded => {
+                log::info!("Orchestration logic strategy: weighted-least-loaded (class- and capacity-aware, no queue model)")
+            }
+            crate::OrchestrationStrategy::LeastLoaded => {
+                log::info!("Orchestration logic strategy: least-loaded (agent count only, class- and capacity-blind)")
+            }
+            crate::OrchestrationStrategy::CapacityLeastLoaded => {
+                log::info!("Orchestration logic strategy: capacity-least-loaded (agent count / measured capacity, class-blind)")
+            }
         };
 
         Self {
@@ -118,11 +134,55 @@ impl OrchestrationLogic {
     /// based on a general orchestration strategy as defined in the settings.
     /// Always match the deployment requirements specified with the nodes'
     /// capabilities.
-    pub fn next(&mut self, spawn_req: &edgeless_api::function_instance::SpawnFunctionRequest) -> Option<uuid::Uuid> {
+    ///
+    /// `same_workflow_nodes` are the nodes that already host another
+    /// function/resource of the workflow this instance belongs to (empty if
+    /// none, or if the workflow is unknown). Only RandomNode uses it.
+    ///
+    /// `sticky_nodes` is a HARD deployment constraint, honoured by every
+    /// strategy: when it is `Some`, the instance may only be placed on one of
+    /// those nodes. It carries the nodes that already host another component
+    /// of the same sticky group (see the `sticky` annotation). If none of them
+    /// is feasible the function returns `None`, which the orchestrator turns
+    /// into a deployment error rather than placing the component elsewhere.
+    pub fn next(
+        &mut self,
+        spawn_req: &edgeless_api::function_instance::SpawnFunctionRequest,
+        same_workflow_nodes: &[uuid::Uuid],
+        sticky_nodes: Option<&[uuid::Uuid]>,
+    ) -> Option<uuid::Uuid> {
         if self.nodes.is_empty() {
             return None;
         }
         let reqs = crate::deployment_requirements::DeploymentRequirements::from_annotations(&spawn_req.annotations);
+
+        // A sticky group that is already anchored restricts the admissible
+        // nodes before any strategy runs. This is a constraint, not a
+        // preference: if the intersection is empty we return None.
+        if let Some(anchors) = sticky_nodes {
+            let admissible: Vec<usize> = (0..self.nodes.len())
+                .filter(|&i| {
+                    anchors.contains(&self.nodes[i])
+                        && Self::is_node_feasible(
+                            &spawn_req.spec.function_type,
+                            &reqs,
+                            &self.nodes[i],
+                            &self.capabilities[i],
+                            &self.resource_providers[i],
+                        )
+                })
+                .collect();
+            if admissible.is_empty() {
+                log::warn!(
+                    "sticky constraint cannot be satisfied: none of the {} anchor node(s) can host this component",
+                    anchors.len()
+                );
+                return None;
+            }
+            let ndx = admissible[self.rng.gen_range(0..admissible.len())];
+            return Some(self.nodes[ndx]);
+        }
+
         match self.orchestration_strategy {
             crate::OrchestrationStrategy::Random => {
                 // Select only the nodes that are feasible.
@@ -176,7 +236,124 @@ impl OrchestrationLogic {
                 }
                 None
             }
+            crate::OrchestrationStrategy::RandomNode => {
+                // Workflow co-location:
+                //  1. among the feasible nodes, prefer one that already hosts
+                //     another function/resource of the same workflow;
+                //  2. if none does (first instance of the workflow, or the
+                //     workflow's nodes cannot host this one), pick uniformly at
+                //     random among the feasible nodes.
+                self.random_node(&spawn_req.spec.function_type, &reqs, same_workflow_nodes)
+            }
+            crate::OrchestrationStrategy::Intelligent
+            | crate::OrchestrationStrategy::WeightedLeastLoaded
+            | crate::OrchestrationStrategy::LeastLoaded
+            | crate::OrchestrationStrategy::CapacityLeastLoaded => {
+                // Agents (components declaring an agent class) are placed by
+                // the policy in orchestrator_task.rs before this is reached.
+                // Everything else - components that declare nothing - follows
+                // its workflow when possible, as under RandomNode.
+                self.random_node(&spawn_req.spec.function_type, &reqs, same_workflow_nodes)
+            }
         }
+    }
+
+    pub fn is_random_node(&self) -> bool {
+        matches!(self.orchestration_strategy, crate::OrchestrationStrategy::RandomNode)
+    }
+
+    /// True if the configured strategy is Intelligent (class-aware predictive placement).
+    pub fn is_intelligent(&self) -> bool {
+        matches!(self.orchestration_strategy, crate::OrchestrationStrategy::Intelligent)
+    }
+
+    /// True if the configured strategy is WeightedLeastLoaded, the
+    /// class- and capacity-aware baseline without the queueing model.
+    pub fn is_weighted_least_loaded(&self) -> bool {
+        matches!(self.orchestration_strategy, crate::OrchestrationStrategy::WeightedLeastLoaded)
+    }
+
+    /// True if the configured strategy is CapacityLeastLoaded (CLL): smallest
+    /// (agents + 1) / capacity, blind to class.
+    pub fn is_capacity_least_loaded(&self) -> bool {
+        matches!(self.orchestration_strategy, crate::OrchestrationStrategy::CapacityLeastLoaded)
+    }
+
+    /// True if the strategy places declared agents itself (any of the
+    /// agent-level policies: CAP, WLL, CLL).
+    pub fn is_agent_aware(&self) -> bool {
+        self.is_intelligent() || self.is_weighted_least_loaded() || self.is_capacity_least_loaded()
+    }
+
+    /// Short policy name used in placement logs.
+    pub fn policy_label(&self) -> &'static str {
+        match self.orchestration_strategy {
+            crate::OrchestrationStrategy::Intelligent => "intelligent",
+            crate::OrchestrationStrategy::WeightedLeastLoaded => "wll",
+            crate::OrchestrationStrategy::CapacityLeastLoaded => "cll",
+            _ => "other",
+        }
+    }
+
+    /// Select a node for a RESOURCE that belongs to an already-anchored sticky
+    /// group. `provider_nodes` are the nodes offering the required provider.
+    /// Returns `None` when no anchor node offers it, which the orchestrator
+    /// turns into a deployment error.
+    pub fn next_resource_sticky(&mut self, provider_nodes: &[uuid::Uuid], sticky_nodes: &[uuid::Uuid]) -> Option<uuid::Uuid> {
+        let admissible: Vec<uuid::Uuid> = provider_nodes.iter().copied().filter(|n| sticky_nodes.contains(n)).collect();
+        if admissible.is_empty() {
+            log::warn!(
+                "sticky constraint cannot be satisfied: none of the {} anchor node(s) offers the required resource provider",
+                sticky_nodes.len()
+            );
+            return None;
+        }
+        Some(admissible[self.rng.gen_range(0..admissible.len())])
+    }
+
+    /// Select a node for a RESOURCE under the RandomNode strategy, given the
+    /// nodes that offer the required provider. Same rule as for functions:
+    /// prefer a node already hosting the workflow, else uniform random.
+    /// Returns None if `provider_nodes` is empty.
+    pub fn next_resource_random_node(&mut self, provider_nodes: &[uuid::Uuid], same_workflow_nodes: &[uuid::Uuid]) -> Option<uuid::Uuid> {
+        if provider_nodes.is_empty() {
+            return None;
+        }
+        let affine: Vec<uuid::Uuid> = provider_nodes.iter().copied().filter(|n| same_workflow_nodes.contains(n)).collect();
+        let pool = if affine.is_empty() { provider_nodes } else { &affine[..] };
+        let chosen = pool[self.rng.gen_range(0..pool.len())];
+        log::debug!(
+            "RandomNode resource placement: {} candidates, {} affine -> {}",
+            provider_nodes.len(),
+            affine.len(),
+            chosen
+        );
+        Some(chosen)
+    }
+
+    /// RandomNode selection for functions (see `next`).
+    fn random_node(
+        &mut self,
+        runtime: &str,
+        reqs: &crate::deployment_requirements::DeploymentRequirements,
+        same_workflow_nodes: &[uuid::Uuid],
+    ) -> Option<uuid::Uuid> {
+        let feasible: Vec<usize> = (0..self.nodes.len())
+            .filter(|&i| Self::is_node_feasible(runtime, reqs, &self.nodes[i], &self.capabilities[i], &self.resource_providers[i]))
+            .collect();
+        if feasible.is_empty() {
+            return None;
+        }
+        let affine: Vec<usize> = feasible.iter().copied().filter(|&i| same_workflow_nodes.contains(&self.nodes[i])).collect();
+        let pool = if affine.is_empty() { &feasible } else { &affine };
+        let ndx = pool[self.rng.gen_range(0..pool.len())];
+        log::debug!(
+            "RandomNode function placement: {} feasible, {} affine -> {}",
+            feasible.len(),
+            affine.len(),
+            self.nodes[ndx]
+        );
+        Some(self.nodes[ndx])
     }
 }
 
@@ -299,5 +476,31 @@ mod tests {
         assert!(crate::orchestration_logic::OrchestrationLogic::is_node_feasible(
             &runtime, &reqs, &node_id, &caps, &providers
         ));
+    }
+
+    #[test]
+    fn test_random_node_affinity() {
+        let mut logic = crate::orchestration_logic::OrchestrationLogic::new(crate::OrchestrationStrategy::RandomNode);
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        let c = uuid::Uuid::new_v4();
+        let providers = vec![a, b, c];
+
+        // no instance of the workflow yet: any provider node may be chosen
+        let chosen = logic.next_resource_random_node(&providers, &[]).unwrap();
+        assert!(providers.contains(&chosen));
+
+        // the workflow already lives on b: b must be chosen, every time
+        for _ in 0..20 {
+            assert_eq!(logic.next_resource_random_node(&providers, &[b]).unwrap(), b);
+        }
+
+        // the workflow lives on a node that cannot host this resource: fall back to random
+        let other = uuid::Uuid::new_v4();
+        let chosen = logic.next_resource_random_node(&providers, &[other]).unwrap();
+        assert!(providers.contains(&chosen));
+
+        // no provider at all
+        assert!(logic.next_resource_random_node(&[], &[b]).is_none());
     }
 }

@@ -1,0 +1,10 @@
+{
+    "id": "conversation_mem",
+    "function_type": "RUST_WASM",
+    "version": "0.1",
+    "build": "Cargo.toml",
+    "outputs": [
+        "llm",
+        "post"
+    ]
+}
