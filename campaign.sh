@@ -19,7 +19,7 @@
 set -u
 cd /home/EDGELESS-PROJECT
 
-POLICIES="${POLICIES:-WeightedLeastLoaded}"
+POLICIES="${POLICIES:-RandomNode}"
 REPS="${REPS:-5}"
 HORIZON="${HORIZON:-60}"
 COMPRESSION="${COMPRESSION:-1200}"
@@ -28,6 +28,13 @@ WORKFLOW="${WORKFLOW:-functions/convmem/workflow.json}"
 OUT="${OUT:-results/campaign}"
 SETTLE="${SETTLE:-60}"
 ANSWER_HOST="${ANSWER_HOST:-172.20.20.5}" 
+VAR_N="${VAR_N:-35}"                 
+DURATION="${DURATION:-600}"             
+SCHEDULE="${SCHEDULE:-}"                    
+ARRIVAL_GAP="${ARRIVAL_GAP:-}"             # "LO HI" seconds: random gap between agent arrivals
+POISSON_MEAN="${POISSON_MEAN:-}"           # mean gap (s) for Poisson agent arrivals
+POISSON_CAP="${POISSON_CAP:-}"             # max gap (s), default 3x the mean
+DRIVER_EXTRA=()
 
 mkdir -p "$OUT"
 
@@ -70,7 +77,7 @@ run_cell () {
     sleep 2
     date +%s > /tmp/run_start
 
-    # node telemetry, every 5 s. proxy_cli prints "<host> -> memory free ..."
+    # node telemetry, every 1 s. proxy_cli prints "<host> -> memory free ..."
     echo "unix_ts,node,gpu_load_perc,active_power_mw,mem_used_kb,load1_perc" \
         > "$OUT/${run}_nodes.csv"
     ( while true; do
@@ -85,7 +92,7 @@ run_cell () {
                 if (match($0, /1 minute [0-9]+%/))      l1=substr($0,RSTART+9,RLENGTH-10);
                 printf "%s,%s,%s,%s,%s,%s\n", ts, node, gpu, pw, mem, l1;
               }'
-        sleep 5
+        sleep 2
       done >> "$OUT/${run}_nodes.csv" ) &
     local sampler=$!
 
@@ -104,6 +111,7 @@ run_cell () {
         --on-timeout retry --max-retries 2 \
         --quiet-answers --no-save-answers \
         --workflow "$WORKFLOW" \
+        "${DRIVER_EXTRA[@]}" \
         --out-dir "$OUT" --run-id "$run"
 
     kill "$sampler" 2>/dev/null
@@ -159,10 +167,36 @@ composition_sweep () {
     done
 }
 
+# Sweep C: variable arrival times and per-agent workload from SCHEDULE. Agents
+# arrive at the given times, each runs its own number of rounds, and some
+# restart on a fresh workflow instance until DURATION expires.
+variable_sweep () {
+    echo "=== SWEEP C: variable arrival + workload ==="
+    if [ -z "$SCHEDULE" ] || [ ! -f "$SCHEDULE" ]; then
+        echo "variable sweep needs SCHEDULE=<schedule.json>" >&2
+        return 1
+    fi
+    for POLICY in $POLICIES; do
+        switch_policy "$POLICY" || continue
+        for N in $VAR_N; do
+            for REP in $(seq 1 "$REPS"); do
+                DRIVER_EXTRA=(--schedule "$SCHEDULE" --duration "$DURATION")
+                # same rep -> same arrivals across policies (paired comparison)
+                [ -n "$POISSON_MEAN" ] && DRIVER_EXTRA+=(--poisson-mean "$POISSON_MEAN" \
+                    ${POISSON_CAP:+--poisson-cap "$POISSON_CAP"} --arrival-seed "$REP")
+                [ -n "$ARRIVAL_GAP" ] && DRIVER_EXTRA+=(--arrival-gap $ARRIVAL_GAP --arrival-seed "$REP")
+                run_cell "var_${POLICY}_N${N}_r${REP}" "$N" 0.5
+            done
+        done
+    done
+    DRIVER_EXTRA=()
+}
+
 case "${1:-all}" in
     calibration)  calibration ;;
     load)         load_sweep ;;
     composition)  composition_sweep ;;
+    variable)     variable_sweep ;;
     all)          calibration; load_sweep; composition_sweep ;;
-    *)            echo "usage: $0 {calibration|load|composition|all}"; exit 1 ;;
+    *)            echo "usage: $0 {calibration|load|composition|variable|all}"; exit 1 ;;
 esac

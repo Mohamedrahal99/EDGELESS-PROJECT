@@ -833,22 +833,15 @@ impl OrchestratorTask {
             let age = self.agent_since.get(&wf).map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
             per_node.entry(node).or_default().push(prof.agent(age));
         }
-        // Reference compute for normalisation: the largest cores x clock among
-        // the candidate nodes. Each node's capacity is its own cores x clock
-        // over that reference (so the fastest node is 1.0), unless a `capacity=`
-        // label overrides it (e.g. a measured throughput ratio).
-        let raw = |n: &uuid::Uuid| -> f64 {
-            self.nodes.get(n).map_or(1.0, |d| {
-                let c = d.capabilities.num_cores.max(d.capabilities.num_cpus) as f64;
-                (c * d.capabilities.clock_freq_cpu as f64).max(1.0)
-            })
-        };
-        let reference = allowed.iter().map(raw).fold(1.0_f64, f64::max);
+        // A node's capacity is its `capacity=` label (measured throughput
+        // relative to a full-speed node), 1.0 when unlabelled. cores x clock is
+        // not used: the reported clock is a BogoMIPS value that differs between
+        // identical Orins (729 vs 2201) and does not track inference speed.
         let mut candidates = vec![];
         for node in allowed {
             let labels = self.nodes.get(node).map(|d| d.capabilities.labels.clone()).unwrap_or_default();
             let capacity = crate::intelligent::label_f64(&labels, "capacity")
-                .unwrap_or(raw(node) / reference)
+                .unwrap_or(1.0)
                 .clamp(0.05, 1.0);
             candidates.push(crate::intelligent::Candidate {
                 node: *node,

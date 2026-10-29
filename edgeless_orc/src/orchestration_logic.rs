@@ -40,9 +40,6 @@ impl OrchestrationLogic {
             crate::OrchestrationStrategy::WeightedLeastLoaded => {
                 log::info!("Orchestration logic strategy: weighted-least-loaded (class- and capacity-aware, no queue model)")
             }
-            crate::OrchestrationStrategy::LeastLoaded => {
-                log::info!("Orchestration logic strategy: least-loaded (agent count only, class- and capacity-blind)")
-            }
             crate::OrchestrationStrategy::CapacityLeastLoaded => {
                 log::info!("Orchestration logic strategy: capacity-least-loaded (agent count / measured capacity, class-blind)")
             }
@@ -247,7 +244,6 @@ impl OrchestrationLogic {
             }
             crate::OrchestrationStrategy::Intelligent
             | crate::OrchestrationStrategy::WeightedLeastLoaded
-            | crate::OrchestrationStrategy::LeastLoaded
             | crate::OrchestrationStrategy::CapacityLeastLoaded => {
                 // Agents (components declaring an agent class) are placed by
                 // the policy in orchestrator_task.rs before this is reached.

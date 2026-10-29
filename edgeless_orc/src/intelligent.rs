@@ -147,8 +147,11 @@ pub struct Params {
 impl Default for Params {
     fn default() -> Self {
         let mut classes = HashMap::new();
-        classes.insert("mouse".to_string(), AgentProfile { service_s: 3.41, think_s: 18.0, growth_per_round: 0.0 });
-        classes.insert("elephant".to_string(), AgentProfile { service_s: 19.68, think_s: 18.0, growth_per_round: 0.0 });
+        // Service time of one round on a node of capacity 1.0 (a full-speed
+        // Orin), mean over a 12-round conversation, from the single-agent
+        // calibration runs. Think time is the driver's fixed 18 s.
+        classes.insert("mouse".to_string(), AgentProfile { service_s: 0.95, think_s: 18.0, growth_per_round: 0.0 });
+        classes.insert("elephant".to_string(), AgentProfile { service_s: 5.44, think_s: 18.0, growth_per_round: 0.0 });
         Self {
             classes,
             epsilon: 0.10,
@@ -164,7 +167,7 @@ impl Params {
     /// Defaults, overridden by:
     ///
     /// * `EDGELESS__CLASSES`   `name=service:think:growth,...`
-    ///   e.g. `mouse=3.41:18:0,elephant=19.68:18:0`
+    ///   e.g. `mouse=0.95:18:0,elephant=5.44:18:0`
     /// * `EDGELESS_INTELLIGENT_EPSILON`   e.g. `0.10`
     /// * `EDGELESS_INTELLIGENT_CV`        e.g. `0.30`
     /// * `EDGELESS_INTELLIGENT_LLM_CLASS` e.g. `ollama`

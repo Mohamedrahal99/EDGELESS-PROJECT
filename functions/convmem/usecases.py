@@ -31,13 +31,13 @@ import statistics
 # when no agent class is used, the default answer spec is a short, generic instruction.
 DEFAULT_ANSWER_SPEC = "Answer in at most 3 sentences."
 
+def estimate_tokens(text):
     """Rough token estimate (~4 chars/token). Bytes remain the exact metric;
     this is carried alongside because context limits are token-based."""
-def estimate_tokens(text):
     return max(1, len(text) // 4)
 
-    """Raised instead of silently fabricating data."""
 class SyntheticDataRefused(SystemExit):
+    """Raised instead of silently fabricating data."""
 
 class AgentClass:
     def __init__(self, name, window_hours, answer_spec):
@@ -68,9 +68,9 @@ ELEPHANT = AgentClass(
 
 AGENT_CLASSES = {"mouse": MOUSE, "elephant": ELEPHANT}
 
+def assign_agent_class(rng, elephant_frac=0.5):
     """Draw a class for one agent. Uses the session's seeded RNG, so the same
     --seed reproduces the same mice/elephant assignment."""
-def assign_agent_class(rng, elephant_frac=0.5):
     return ELEPHANT if rng.random() < elephant_frac else MOUSE
 
 

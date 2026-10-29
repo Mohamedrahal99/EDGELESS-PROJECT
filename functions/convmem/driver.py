@@ -15,10 +15,11 @@ aggregate.
 
 Typical use:
     # single session
-    ./driver.py --usecase pdm --rounds 20 --timing human
+    ./driver.py --usecase pdm --rounds 20 --timing human 
 """
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -127,6 +128,82 @@ def workflow_stop(cli, sid):
                    capture_output=True, text=True)
 
 
+# variable arrival / workload schedule
+def load_schedule(args):
+    """Per-agent plan: [{start_s, rounds, restart}, ...] (index = agent number),
+    read from the JSON list given by --schedule."""
+    with open(args.schedule) as f:
+        plan = json.load(f)
+    plans = [{"start_s": float(a.get("start_s", 0)),
+              "rounds": int(a["rounds"]),
+              "restart": bool(a.get("restart", False)),
+              "cycles": int(a.get("cycles", 0))} for a in plan]
+    if args.poisson_mean:
+        # Poisson arrivals: exponential gaps with the given mean, each capped.
+        rng = random.Random(args.arrival_seed)
+        cap = args.poisson_cap or 3 * args.poisson_mean
+        t = 0.0
+        for k, pl in enumerate(plans):
+            if k:
+                t += min(rng.expovariate(1.0 / args.poisson_mean), cap)
+            pl["start_s"] = round(t, 1)
+    elif args.arrival_gap:
+        # random inter-arrival gaps: agent 0 at t=0, each next one a uniform
+        # draw in [lo, hi] seconds after the previous. Same seed -> same arrivals.
+        lo, hi = args.arrival_gap
+        rng = random.Random(args.arrival_seed)
+        t = 0.0
+        for k, pl in enumerate(plans):
+            if k:
+                t += rng.uniform(lo, hi)
+            pl["start_s"] = round(t, 1)
+    return plans
+
+
+def pick_class(args, rng, i, n):
+    if args.agent_classes and args.alternate_classes:
+        n_eleph = round(args.elephant_frac * n)
+        is_eleph = (i * n_eleph) % max(n, 1) < n_eleph
+        return usecases.ELEPHANT if is_eleph else usecases.MOUSE
+    if args.agent_classes:
+        return usecases.assign_agent_class(rng, args.elephant_frac)
+    return None 
+
+
+def agent_lifecycle(args, i, plan, agent_class, t0, deadline, tmpdir, summaries,
+                    write_row, started):
+    """One agent: wait for its arrival time, then run `rounds` rounds on a fresh
+    workflow instance; if restart, stop it, redeploy a fresh one and repeat until
+    the run duration is over."""
+    time.sleep(max(0.0, t0 + plan["start_s"] - time.time()))
+    cycle = 0
+    while time.time() < deadline and not (plan["cycles"] and cycle >= plan["cycles"]):
+        a = copy.copy(args)
+        a.agent, a.cycle, a.rounds, a.deadline = i, cycle, plan["rounds"], deadline
+        # enough simulated hours to yield >= `rounds` queries (1 trend per 4)
+        per = max(1, args.query_every_hours)
+        periodic = int(plan["rounds"] / (1 + (1 / args.trend_every if args.trend_every else 0))) + 2
+        a.horizon_hours = max(args.horizon_hours, periodic * per)
+        tag = f"s{i}c{cycle}"
+        rng = random.Random(args.seed + i + 1000 * cycle)
+        uc = usecases.build(args.usecase, a, rng, session=i, agent_class=agent_class)
+        answer_url = f"http://{args.answer_host}:{args.answer_port}/answer/{tag}"
+        wf_path = render_workflow(args.workflow, os.path.join(tmpdir, f"wf_{tag}.json"),
+                                  answer_url, args.model, agent_class)
+        sid = workflow_start(args.cli, wf_path)
+        cls = uc.meta.get("agent_class", {}).get("class", "uniform")
+        print(f"[{tag}] t+{time.time()-t0:.0f}s workflow {sid} started [{cls}] "
+              f"rounds={plan['rounds']}", flush=True)
+        started.append(uc)
+        time.sleep(args.settle_s)   # let this agent's instances settle
+        try:
+            summaries.append(run_session(a, tag, uc, args.ingress, sid, write_row))
+        finally:
+            workflow_stop(args.cli, sid)
+            print(f"[{tag}] t+{time.time()-t0:.0f}s workflow stopped", flush=True)
+        if not plan["restart"]:
+            break
+        cycle += 1
 # ==========================================================================
 # one session
 # ==========================================================================
@@ -142,6 +219,8 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
 
     for task in uc.tasks():
         if args.rounds and task["idx"] >= args.rounds:
+            break
+        if getattr(args, "deadline", 0) and time.time() >= args.deadline:
             break
         prompt = uc.render(task)
         # PROMPT_MARKER lets ConversationMem distinguish a request from an LLM
@@ -164,7 +243,7 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
                 with urllib.request.urlopen(req, timeout=args.post_timeout) as r:
                     r.read()
                 posted = True
-            except Exception as e:                              # noqa: BLE001
+            except Exception as e:                            
                 print(f"[{tag}] POST failed on round {task['idx']}: {e}", flush=True)
                 posted = False
 
@@ -227,6 +306,8 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
 
         rec = {
             "session": tag,
+            "agent": getattr(args, "agent", ""),
+            "cycle": getattr(args, "cycle", ""),
             "wf_id": sid,
             "round": task["idx"],
             "intent": task.get("intent", task.get("doc", "")),
@@ -287,6 +368,8 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
                  if r["latency_s"] != "" and not r["instrumentation"]]
     summary = {
         "session": tag,
+        "agent": getattr(args, "agent", None),
+        "cycle": getattr(args, "cycle", None),
         "wf_id": sid,
         "agent_class": uc.meta.get("agent_class", {}).get("class", "uniform"),
         "rounds": len(records),
@@ -395,7 +478,28 @@ def main():
                    help="also write each full answer to <out-dir>/answers/ (default on)")
     p.add_argument("--no-save-answers", dest="save_answers", action="store_false")
     p.add_argument("--run-id", default="")
+    # variable arrival / workload (scheduled mode)
+    p.add_argument("--schedule", default="",
+                   help="JSON list of {start_s, rounds, restart} per agent; "
+                        "agents arrive and run for different lengths")
+    p.add_argument("--arrival-gap", type=float, nargs=2, metavar=("LO", "HI"),
+                   help="scheduled mode: replace start_s with random gaps, uniform "
+                        "in [LO, HI] seconds between consecutive agent arrivals")
+    p.add_argument("--poisson-mean", type=float, default=0.0,
+                   help="scheduled mode: Poisson arrivals, mean gap in seconds "
+                        "(exponential gaps; overrides start_s)")
+    p.add_argument("--poisson-cap", type=float, default=0.0,
+                   help="max gap for --poisson-mean (default 3x the mean)")
+    p.add_argument("--arrival-seed", type=int, default=42,
+                   help="seed for --arrival-gap (campaign.sh uses the rep number)")
+    p.add_argument("--duration", type=float, default=1800.0,
+                   help="scheduled mode: run length in seconds; no new cycle "
+                        "starts after it, and running ones stop at it")
+    p.add_argument("--settle-s", type=float, default=5.0,
+                   help="scheduled mode: pause after each (re)deploy")
     args = p.parse_args()
+    args.deadline = 0
+    scheduled = bool(args.schedule)
 
     run_id = args.run_id or f"{args.usecase}_{args.timing}_{time.strftime('%Y%m%d-%H%M%S')}"
     os.makedirs(args.out_dir, exist_ok=True)
@@ -406,7 +510,7 @@ def main():
     print(f"answer server on :{args.answer_port}  (platform posts to "
           f"http://{args.answer_host}:{args.answer_port}/answer/<tag>)", flush=True)
 
-    fields = ["session", "wf_id", "agent_class", "round", "intent", "instrumentation",
+    fields = ["session", "agent", "cycle", "wf_id", "agent_class", "round", "intent", "instrumentation",
               "sim_hour", "event", "prompt_bytes", "answer_bytes",
               "prompt_tokens_est", "answer_tokens_est",
               "latency_s", "timed_out", "attempts", "error",
@@ -426,7 +530,34 @@ def main():
     os.makedirs(tmpdir, exist_ok=True)
 
     try:
-        for i in range(args.sessions):
+        if scheduled:
+            plans = load_schedule(args)
+            args.sessions = len(plans)
+            print("schedule:", flush=True)
+            for i, pl in enumerate(plans):
+                print(f"  agent {i}: start={pl['start_s']}s rounds={pl['rounds']} "
+                      f"restart={pl['restart']} cycles={pl['cycles'] or 'until duration'}",
+                      flush=True)
+            with open(os.path.join(args.out_dir, f"{run_id}_schedule.json"), "w") as f:
+                json.dump(plans, f, indent=2)
+            t0 = time.time()
+            deadline = t0 + args.duration
+            started = []
+            for i, pl in enumerate(plans):
+                cls_ = pick_class(args, random.Random(args.seed + i), i, len(plans))
+                t = threading.Thread(
+                    target=agent_lifecycle,
+                    args=(args, i, pl, cls_, t0, deadline, tmpdir, summaries,
+                          write_row, started),
+                    daemon=True)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+            plans_done = True
+        else:
+            plans_done = False
+        for i in range(0 if plans_done else args.sessions):
             tag = f"s{i}"
             rng = random.Random(args.seed + i)
             # Each agent is assigned to a category. With --alternate-classes the
@@ -464,7 +595,8 @@ def main():
             print("!! synthetic=True and must NOT be reported as measurements.")
             print("!" * 72 + "\n", flush=True)
 
-        time.sleep(15)  # let the instances settle
+        if not plans_done:
+            time.sleep(15)  # let the instances settle
 
         for (tag, sid, uc) in sessions:
             t = threading.Thread(
@@ -477,7 +609,7 @@ def main():
             t.join()
 
     finally:
-        if not args.no_workflow_control:
+        if not args.no_workflow_control and not scheduled:
             for (_, sid, _) in sessions:
                 workflow_stop(args.cli, sid)
         fcsv.close()

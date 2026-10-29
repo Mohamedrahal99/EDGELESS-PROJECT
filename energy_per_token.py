@@ -58,11 +58,11 @@ for k in sorted(jpt, key=lambda x:(x[1],x[0])):
     print(f"{k[0]:<12}{k[1]:>4}{len(j):>5}{statistics.fmean(j):>9.2f} ±{sd:<3.2f}{statistics.fmean(e):>10.1f}")
 
 # relative to the best stock policy per N
-print("\nIntelligent J/token vs best stock policy:")
+print("\CAP J/token vs best stock policy:")
 for n in sorted({k[1] for k in jpt}):
-    stock={k[0]:statistics.fmean(jpt[k]) for k in jpt if k[1]==n and k[0]!="Intelligent"}
-    intel=[statistics.fmean(jpt[k]) for k in jpt if k==("Intelligent",n)]
+    stock={k[0]:statistics.fmean(jpt[k]) for k in jpt if k[1]==n and k[0]!="CAP"}
+    intel=[statistics.fmean(jpt[k]) for k in jpt if k==("CAP",n)]
     if stock and intel:
         best=min(stock.values())
         d=(intel[0]-best)/best*100
-        print(f"  N={n:<3} Intelligent {intel[0]:.2f}  best stock {best:.2f}  -> {d:+.0f}%")
+        print(f"  N={n:<3} CAP {intel[0]:.2f}  best stock {best:.2f}  -> {d:+.0f}%")
