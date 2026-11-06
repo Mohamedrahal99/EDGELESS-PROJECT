@@ -19,8 +19,8 @@
 set -u
 cd /home/EDGELESS-PROJECT
 
-POLICIES="${POLICIES:-RandomNode}"
-REPS="${REPS:-5}"
+POLICIES="${POLICIES:-Intelligent}"
+REPS="${REPS:-35}"
 HORIZON="${HORIZON:-60}"
 COMPRESSION="${COMPRESSION:-1200}"
 DATA="${DATA:-/home/EDGELESS-PROJECT/data_dpm}"
@@ -29,11 +29,12 @@ OUT="${OUT:-results/campaign}"
 SETTLE="${SETTLE:-60}"
 ANSWER_HOST="${ANSWER_HOST:-172.20.20.5}" 
 VAR_N="${VAR_N:-35}"                 
-DURATION="${DURATION:-600}"             
-SCHEDULE="${SCHEDULE:-}"                    
-ARRIVAL_GAP="${ARRIVAL_GAP:-}"             # "LO HI" seconds: random gap between agent arrivals
-POISSON_MEAN="${POISSON_MEAN:-}"           # mean gap (s) for Poisson agent arrivals
-POISSON_CAP="${POISSON_CAP:-}"             # max gap (s), default 3x the mean
+DURATION="${DURATION:-3600}"               # hard deadline (s): every workflow stops at it
+SCHEDULE="${SCHEDULE:-}"
+UNIFORM_WINDOW="${UNIFORM_WINDOW:-60}"     # arrival times uniform in [0, W] s; agents restart until DURATION
+ARRIVAL_GAP="${ARRIVAL_GAP:-}"            
+POISSON_MEAN="${POISSON_MEAN:-}"          
+POISSON_CAP="${POISSON_CAP:-}"         
 DRIVER_EXTRA=()
 
 mkdir -p "$OUT"
@@ -102,7 +103,11 @@ run_cell () {
       journalctl -u edgeless-con.service --since "@$(cat /tmp/run_start)" --no-pager \
         | grep "started with fid" > "$OUT/${run}_fids.txt" 2>/dev/null ) &
 
-    python3 functions/convmem/driver.py \
+    # safety net for timed runs: SIGINT lets the driver stop its workflows
+    local guard=()
+    [ ${#DRIVER_EXTRA[@]} -gt 0 ] && guard=(timeout --signal=INT --kill-after=60 $((DURATION + 300)))
+
+    "${guard[@]}" python3 functions/convmem/driver.py \
         --usecase pdm --data-dir "$DATA" \
         --sessions "$sessions" --machine-id 1 \
         --agent-classes --alternate-classes --elephant-frac "$frac" \
@@ -147,7 +152,7 @@ load_sweep () {
     echo "=== SWEEP A: offered load, 50% elephants ==="
     for POLICY in $POLICIES; do
         switch_policy "$POLICY" || continue
-        for N in 35; do
+        for N in 5; do
             for REP in $(seq 1 "$REPS"); do
                 run_cell "load_${POLICY}_N${N}_r${REP}" "$N" 0.5
             done
@@ -182,6 +187,8 @@ variable_sweep () {
             for REP in $(seq 1 "$REPS"); do
                 DRIVER_EXTRA=(--schedule "$SCHEDULE" --duration "$DURATION")
                 # same rep -> same arrivals across policies (paired comparison)
+                [ -n "$UNIFORM_WINDOW" ] && DRIVER_EXTRA+=(--uniform-window "$UNIFORM_WINDOW" \
+                    --arrival-seed "$REP")
                 [ -n "$POISSON_MEAN" ] && DRIVER_EXTRA+=(--poisson-mean "$POISSON_MEAN" \
                     ${POISSON_CAP:+--poisson-cap "$POISSON_CAP"} --arrival-seed "$REP")
                 [ -n "$ARRIVAL_GAP" ] && DRIVER_EXTRA+=(--arrival-gap $ARRIVAL_GAP --arrival-seed "$REP")

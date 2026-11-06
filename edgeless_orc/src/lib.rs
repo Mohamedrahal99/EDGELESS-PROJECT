@@ -231,6 +231,5 @@ pub fn edgeless_orc_default_conf() -> String {
             dataset_settings: Some(EdgelessOrcProxyDatasetSettings::default()),
         },
     };
-
     toml::to_string(&orc_conf).expect("Wrong")
 }

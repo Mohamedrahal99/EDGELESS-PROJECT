@@ -138,7 +138,15 @@ def load_schedule(args):
               "rounds": int(a["rounds"]),
               "restart": bool(a.get("restart", False)),
               "cycles": int(a.get("cycles", 0))} for a in plan]
-    if args.poisson_mean:
+    if args.uniform_window:
+        # arrival times i.i.d. U(0, W), sorted; every agent keeps restarting on
+        # a fresh workflow until the duration is over. Same seed -> same arrivals.
+        rng = random.Random(args.arrival_seed)
+        times = sorted(rng.uniform(0, args.uniform_window) for _ in plans)
+        for pl, t in zip(plans, times):
+            pl["start_s"] = round(t, 1)
+            pl["restart"], pl["cycles"] = True, 0
+    elif args.poisson_mean:
         # Poisson arrivals: exponential gaps with the given mean, each capped.
         rng = random.Random(args.arrival_seed)
         cap = args.poisson_cap or 3 * args.poisson_mean
@@ -171,11 +179,12 @@ def pick_class(args, rng, i, n):
 
 
 def agent_lifecycle(args, i, plan, agent_class, t0, deadline, tmpdir, summaries,
-                    write_row, started):
+                    write_row, started, live):
     """One agent: wait for its arrival time, then run `rounds` rounds on a fresh
     workflow instance; if restart, stop it, redeploy a fresh one and repeat until
-    the run duration is over."""
-    time.sleep(max(0.0, t0 + plan["start_s"] - time.time()))
+    the run duration is over. `live` maps agent -> running workflow id, so the
+    main thread can stop whatever is still up at the deadline."""
+    time.sleep(max(0.0, min(t0 + plan["start_s"], deadline) - time.time()))
     cycle = 0
     while time.time() < deadline and not (plan["cycles"] and cycle >= plan["cycles"]):
         a = copy.copy(args)
@@ -191,6 +200,7 @@ def agent_lifecycle(args, i, plan, agent_class, t0, deadline, tmpdir, summaries,
         wf_path = render_workflow(args.workflow, os.path.join(tmpdir, f"wf_{tag}.json"),
                                   answer_url, args.model, agent_class)
         sid = workflow_start(args.cli, wf_path)
+        live[i] = sid
         cls = uc.meta.get("agent_class", {}).get("class", "uniform")
         print(f"[{tag}] t+{time.time()-t0:.0f}s workflow {sid} started [{cls}] "
               f"rounds={plan['rounds']}", flush=True)
@@ -199,6 +209,7 @@ def agent_lifecycle(args, i, plan, agent_class, t0, deadline, tmpdir, summaries,
         try:
             summaries.append(run_session(a, tag, uc, args.ingress, sid, write_row))
         finally:
+            live.pop(i, None)
             workflow_stop(args.cli, sid)
             print(f"[{tag}] t+{time.time()-t0:.0f}s workflow stopped", flush=True)
         if not plan["restart"]:
@@ -233,8 +244,12 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
         attempts = 0
         max_attempts = 1 + (args.max_retries if args.on_timeout == "retry" else 0)
         answer, t_recv, timed_out, platform_error = "", None, False, ""
+        cut = False   # round interrupted by the run deadline, not a platform timeout
 
         while attempts < max_attempts:
+            if attempts and args.deadline and time.time() >= args.deadline:
+                cut, timed_out = True, False   # no retry past the deadline
+                break
             attempts += 1
             t_send = time.perf_counter()
             if first_send is None:
@@ -249,8 +264,11 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
 
             answer, t_recv, timed_out, platform_error = "", None, False, ""
             if posted:
+                wait = args.answer_timeout
+                if args.deadline:
+                    wait = min(wait, max(0.0, args.deadline - time.time()))
                 try:
-                    t_recv, answer = q.get(timeout=args.answer_timeout)
+                    t_recv, answer = q.get(timeout=wait)
                     # the function propagates a failed round as ###ERROR ...
                     if answer.startswith("###ERROR"):
                         platform_error = answer.strip()
@@ -258,6 +276,10 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
                         print(f"[{tag}] round {task['idx']}: platform reported "
                               f"{platform_error}", flush=True)
                 except queue.Empty:
+                    if args.deadline and time.time() >= args.deadline:
+                        cut = True
+                        print(f"[{tag}] round {task['idx']}: cut at deadline", flush=True)
+                        break
                     timed_out = True
                     print(f"[{tag}] round {task['idx']}: TIMEOUT after "
                           f"{args.answer_timeout}s (attempt {attempts}/{max_attempts})",
@@ -316,7 +338,7 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
             "latency_s": round(latency, 4) if latency else "",
             "timed_out": int(timed_out),
             "attempts": attempts,
-            "error": platform_error,
+            "error": "cut_at_deadline" if cut else platform_error,
             "t_send_unix": round(time.time() - (time.perf_counter() - t_send), 3),
             # instrumentation queries probe conversational state rather than
             # represent operator behaviour: excluded from headline results
@@ -352,6 +374,8 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
             print(f"       > {snippet}{'...' if len(answer) > args.show_chars else ''}",
                   flush=True)
 
+        if cut:
+            break
         if timed_out and args.on_timeout == "abort":
             print(f"[{tag}] aborting session after round {task['idx']} "
                   f"({attempts} attempts)", flush=True)
@@ -359,6 +383,8 @@ def run_session(args, tag, uc, ingress, sid, rounds_writer):
 
         # inter-round timing
         gap = uc.unit_pause() if uc.is_unit_end(task) else uc.think_time(task)
+        if args.deadline:
+            gap = min(gap, max(0.0, args.deadline - time.time()))
         if gap > 0:
             time.sleep(gap)
 
@@ -485,6 +511,10 @@ def main():
     p.add_argument("--arrival-gap", type=float, nargs=2, metavar=("LO", "HI"),
                    help="scheduled mode: replace start_s with random gaps, uniform "
                         "in [LO, HI] seconds between consecutive agent arrivals")
+    p.add_argument("--uniform-window", type=float, default=0.0,
+                   help="scheduled mode: arrival times uniform in [0, W] seconds; "
+                        "every agent restarts until --duration (overrides the "
+                        "schedule's restart/cycles)")
     p.add_argument("--poisson-mean", type=float, default=0.0,
                    help="scheduled mode: Poisson arrivals, mean gap in seconds "
                         "(exponential gaps; overrides start_s)")
@@ -526,6 +556,7 @@ def main():
             fcsv.flush()
 
     sessions, summaries, threads = [], [], []
+    live = {}   # scheduled mode: agent -> running workflow id
     tmpdir = os.path.join(args.out_dir, f".{run_id}_wf")
     os.makedirs(tmpdir, exist_ok=True)
 
@@ -548,12 +579,16 @@ def main():
                 t = threading.Thread(
                     target=agent_lifecycle,
                     args=(args, i, pl, cls_, t0, deadline, tmpdir, summaries,
-                          write_row, started),
+                          write_row, started, live),
                     daemon=True)
                 t.start()
                 threads.append(t)
+            # hard stop: rounds give up at the deadline on their own; whatever is
+            # still running after a short grace period is stopped in `finally`
             for t in threads:
-                t.join()
+                t.join(timeout=max(0.0, deadline + 30 - time.time()))
+            if live:
+                print(f"deadline reached, stopping {len(live)} workflow(s)", flush=True)
             plans_done = True
         else:
             plans_done = False
@@ -609,8 +644,8 @@ def main():
             t.join()
 
     finally:
-        if not args.no_workflow_control and not scheduled:
-            for (_, sid, _) in sessions:
+        if not args.no_workflow_control:
+            for sid in (list(live.values()) if scheduled else [s for (_, s, _) in sessions]):
                 workflow_stop(args.cli, sid)
         fcsv.close()
         srv.shutdown()
