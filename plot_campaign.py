@@ -328,6 +328,26 @@ def generate_all_plots(df_runs, df_nodes, df_rounds, output_dir):
         plt.savefig(os.path.join(output_dir, f"fig2_throughput_and_timeouts.{ext}"))
     plt.close()
 
+    # ------- FIGURE 2b: standalone workflow timeouts -------
+    fig, ax = plt.subplots(figsize=(7, 5))
+    if total_to == 0:
+        ax.text(0.5, 0.5, "Zero workflow timeouts\nacross all strategies and loads",
+                ha="center", va="center", fontsize=12, transform=ax.transAxes)
+        ax.set_title("Cumulative Workflow Timeouts")
+        ax.set_axis_off()
+    else:
+        td = load_runs.groupby(["Strategy", "N_Workflows"], as_index=False)["Timeouts"].sum()
+        sns.barplot(data=td, x="N_Workflows", y="Timeouts", hue="Strategy",
+                    hue_order=ho, palette=STRAT_PALETTE, ax=ax)
+        ax.set_title("Cumulative Workflow Timeouts")
+        ax.set_xlabel("Concurrent Agents N")
+        ax.set_ylabel("Total Timed-Out Requests")
+        ax.legend(title="Strategy")
+    plt.tight_layout()
+    for ext in ("pdf", "png"):
+        plt.savefig(os.path.join(output_dir, f"fig_timeouts_only.{ext}"))
+    plt.close()
+
     # ------- FIGURE 3: topology -------
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     sns.lineplot(data=load_runs, x="N_Workflows", y="Colocation_Ratio_%", hue="Strategy",

@@ -24,6 +24,8 @@ pub struct OrchestrationLogic {
     resource_providers: Vec<std::collections::HashSet<String>>,
     /// Used by Random, pair of (weight, node_id).
     weights: Vec<f32>,
+    /// Used by CapacityWeightedRandom, using the capacity label
+    capacity_weights: Vec<f32>,
 }
 
 impl OrchestrationLogic {
@@ -43,6 +45,9 @@ impl OrchestrationLogic {
             crate::OrchestrationStrategy::CapacityLeastLoaded => {
                 log::info!("Orchestration logic strategy: capacity-least-loaded (agent count / measured capacity, class-blind)")
             }
+            crate::OrchestrationStrategy::CapacityWeightedRandom => {
+                log::info!("Orchestration logic strategy: capacity-weighted-random ( capacity label only)")
+            }
         };
 
         Self {
@@ -53,6 +58,7 @@ impl OrchestrationLogic {
             capabilities: vec![],
             resource_providers: vec![],
             weights: vec![],
+            capacity_weights: vec![],
         }
     }
 
@@ -66,6 +72,7 @@ impl OrchestrationLogic {
         self.capabilities.clear();
         self.resource_providers.clear();
         self.weights.clear();
+        self.capacity_weights.clear();
         for (node, desc) in clients {
             if desc.capabilities.do_not_use() || desc.cordoned {
                 // Skip the node if it must not be used, no matter what.
@@ -86,10 +93,14 @@ impl OrchestrationLogic {
                 weight = 1.0;
             }
             self.weights.push(weight);
+            let capacity = crate::intelligent::label_f64(&desc.capabilities.labels, "capacity")
+                .unwrap_or(1.0);
+            self.capacity_weights.push(capacity as f32);
         }
         assert!(self.nodes.len() == self.capabilities.len());
         assert!(self.nodes.len() == self.resource_providers.len());
         assert!(self.nodes.len() == self.weights.len());
+        assert!(self.nodes.len() == self.capacity_weights.len());
         assert!(self.nodes.len() <= clients.len());
     }
 
@@ -159,7 +170,9 @@ impl OrchestrationLogic {
         if let Some(anchors) = sticky_nodes {
             let admissible: Vec<usize> = (0..self.nodes.len())
                 .filter(|&i| {
-                    anchors.contains(&self.nodes[i])
+                    (!matches!(self.orchestration_strategy, crate::OrchestrationStrategy::RandomNode)
+                        || !Self::is_mohamed_one(&self.capabilities[i]))
+                        && anchors.contains(&self.nodes[i])
                         && Self::is_node_feasible(
                             &spawn_req.spec.function_type,
                             &reqs,
@@ -205,6 +218,35 @@ impl OrchestrationLogic {
                         sum += candidate.1;
                         if sum >= rnd {
                             return Some(self.nodes[candidate.0]);
+                        }
+                    }
+                }
+                None
+            }
+            crate::OrchestrationStrategy::CapacityWeightedRandom => {
+                // Use the capacity= label and CAP's missing-label default of
+                // 1.0
+                let mut candidates = vec![];
+                let mut high: f32 = 0.0;
+                for i in 0..self.nodes.len() {
+                    if Self::is_node_feasible(
+                        &spawn_req.spec.function_type,
+                        &reqs,
+                        &self.nodes[i],
+                        &self.capabilities[i],
+                        &self.resource_providers[i],
+                    ) {
+                        candidates.push((i, self.capacity_weights[i]));
+                        high += self.capacity_weights[i];
+                    }
+                }
+                if high > 0.0 {
+                    let rnd = rand::distributions::Uniform::new(0.0, high).sample(&mut self.rng);
+                    let mut sum = 0.0_f32;
+                    for (index, weight) in candidates {
+                        sum += weight;
+                        if sum >= rnd {
+                            return Some(self.nodes[index]);
                         }
                     }
                 }
@@ -275,6 +317,10 @@ impl OrchestrationLogic {
         matches!(self.orchestration_strategy, crate::OrchestrationStrategy::CapacityLeastLoaded)
     }
 
+    pub fn is_capacity_weighted_random(&self) -> bool {
+        matches!(self.orchestration_strategy, crate::OrchestrationStrategy::CapacityWeightedRandom)
+    }
+
     /// True if the strategy places declared agents itself (any of the
     /// agent-level policies: CAP, WLL, CLL).
     pub fn is_agent_aware(&self) -> bool {
@@ -316,7 +362,7 @@ impl OrchestrationLogic {
             return None;
         }
         let affine: Vec<uuid::Uuid> = provider_nodes.iter().copied().filter(|n| same_workflow_nodes.contains(n)).collect();
-        let pool = if affine.is_empty() { provider_nodes } else { &affine[..] };
+        let pool = if affine.is_empty() { provider_nodes } else { &affine };
         let chosen = pool[self.rng.gen_range(0..pool.len())];
         log::debug!(
             "RandomNode resource placement: {} candidates, {} affine -> {}",
@@ -327,6 +373,52 @@ impl OrchestrationLogic {
         Some(chosen)
     }
 
+    /// Select a resource provider node proportionally to CAP's capacity signal.
+    pub fn next_resource_capacity_weighted_random(&mut self, provider_nodes: &[uuid::Uuid]) -> Option<uuid::Uuid> {
+        let candidates: Vec<(usize, f32)> = provider_nodes
+            .iter()
+            .filter_map(|node| {
+                self.nodes.iter().position(|candidate| candidate == node).map(|index| (index, self.capacity_weights[index]))
+            })
+            .collect();
+        let high: f32 = candidates.iter().map(|(_, weight)| weight).sum();
+        if high <= 0.0 {
+            return None;
+        }
+        let rnd = rand::distributions::Uniform::new(0.0, high).sample(&mut self.rng);
+        let mut sum = 0.0_f32;
+        for (index, weight) in candidates {
+            sum += weight;
+            if sum >= rnd {
+                return Some(self.nodes[index]);
+            }
+        }
+        None
+    }
+
+    /// Select among a caller-filtered set of feasible nodes by capacity weight.
+    pub fn next_capacity_weighted_random_from(&mut self, allowed_nodes: &[uuid::Uuid]) -> Option<uuid::Uuid> {
+        let candidates: Vec<(usize, f32)> = allowed_nodes
+            .iter()
+            .filter_map(|node| {
+                self.nodes.iter().position(|candidate| candidate == node).map(|index| (index, self.capacity_weights[index]))
+            })
+            .collect();
+        let high: f32 = candidates.iter().map(|(_, weight)| weight).sum();
+        if high <= 0.0 {
+            return None;
+        }
+        let rnd = rand::distributions::Uniform::new(0.0, high).sample(&mut self.rng);
+        let mut sum = 0.0_f32;
+        for (index, weight) in candidates {
+            sum += weight;
+            if sum >= rnd {
+                return Some(self.nodes[index]);
+            }
+        }
+        None
+    }
+
     /// RandomNode selection for functions (see `next`).
     fn random_node(
         &mut self,
@@ -335,7 +427,10 @@ impl OrchestrationLogic {
         same_workflow_nodes: &[uuid::Uuid],
     ) -> Option<uuid::Uuid> {
         let feasible: Vec<usize> = (0..self.nodes.len())
-            .filter(|&i| Self::is_node_feasible(runtime, reqs, &self.nodes[i], &self.capabilities[i], &self.resource_providers[i]))
+            .filter(|&i| {
+                (!self.is_random_node() || !Self::is_mohamed_one(&self.capabilities[i]))
+                    && Self::is_node_feasible(runtime, reqs, &self.nodes[i], &self.capabilities[i], &self.resource_providers[i])
+            })
             .collect();
         if feasible.is_empty() {
             return None;
@@ -350,6 +445,10 @@ impl OrchestrationLogic {
             self.nodes[ndx]
         );
         Some(self.nodes[ndx])
+    }
+
+    fn is_mohamed_one(capabilities: &edgeless_api::node_registration::NodeCapabilities) -> bool {
+        capabilities.labels.iter().any(|label| label == "hostname=mohamed-1")
     }
 }
 

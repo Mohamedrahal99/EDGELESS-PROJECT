@@ -19,8 +19,8 @@
 set -u
 cd /home/EDGELESS-PROJECT
 
-POLICIES="${POLICIES:-Intelligent}"
-REPS="${REPS:-35}"
+POLICIES="${POLICIES:-RandomNode}"
+REPS="${REPS:-5}"
 HORIZON="${HORIZON:-60}"
 COMPRESSION="${COMPRESSION:-1200}"
 DATA="${DATA:-/home/EDGELESS-PROJECT/data_dpm}"
@@ -28,7 +28,8 @@ WORKFLOW="${WORKFLOW:-functions/convmem/workflow.json}"
 OUT="${OUT:-results/campaign}"
 SETTLE="${SETTLE:-60}"
 ANSWER_HOST="${ANSWER_HOST:-172.20.20.5}" 
-VAR_N="${VAR_N:-35}"                 
+VAR_N="${VAR_N:-5}"
+VAR_FRAC="${VAR_FRAC:-1.0}"                  # elephant fraction for the variable sweep (0 mice, 1.0 elephants)
 DURATION="${DURATION:-3600}"               # hard deadline (s): every workflow stops at it
 SCHEDULE="${SCHEDULE:-}"
 UNIFORM_WINDOW="${UNIFORM_WINDOW:-60}"     # arrival times uniform in [0, W] s; agents restart until DURATION
@@ -67,7 +68,7 @@ switch_policy () {
 run_cell () {
     local run="$1" sessions="$2" frac="$3"
 
-    if [ -f "$OUT/${run}_summary.json" ]; then
+    if [ "${FORCE_RERUN:-0}" != 1 ] && [ -f "$OUT/${run}_summary.json" ]; then
         echo "  = $run already done, skipping"
         return 0
     fi
@@ -192,7 +193,7 @@ variable_sweep () {
                 [ -n "$POISSON_MEAN" ] && DRIVER_EXTRA+=(--poisson-mean "$POISSON_MEAN" \
                     ${POISSON_CAP:+--poisson-cap "$POISSON_CAP"} --arrival-seed "$REP")
                 [ -n "$ARRIVAL_GAP" ] && DRIVER_EXTRA+=(--arrival-gap $ARRIVAL_GAP --arrival-seed "$REP")
-                run_cell "var_${POLICY}_N${N}_r${REP}" "$N" 0.5
+                run_cell "var_${POLICY}_N${N}_r${REP}" "$N" "$VAR_FRAC"
             done
         done
     done

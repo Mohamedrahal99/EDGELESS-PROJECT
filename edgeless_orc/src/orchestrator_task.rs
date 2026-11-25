@@ -477,9 +477,24 @@ impl OrchestratorTask {
         // No sticky constraint (or the group is not yet anchored): fall back to
         // the configured strategy. Under RandomNode, prefer a node that already
         // hosts another component of the same workflow (co-location), falling
-        // back to a random capable node. The other strategies keep choosing a
-        // provider uniformly at random.
-        let chosen_provider: Option<String> = if self.orchestration_logic.is_random_node() {
+        // back to a random capable node. CapacityWeightedRandom samples
+        // provider nodes by CAP capacity; other strategies choose uniformly.
+        let chosen_provider: Option<String> = if self.orchestration_logic.is_capacity_weighted_random() {
+            let mut provider_nodes: Vec<uuid::Uuid> = matching_providers
+                .iter()
+                .filter_map(|p| self.resource_providers.get(p).map(|rp| rp.node_id))
+                .collect();
+            provider_nodes.sort();
+            provider_nodes.dedup();
+            self.orchestration_logic
+                .next_resource_capacity_weighted_random(&provider_nodes)
+                .and_then(|node_id| {
+                    matching_providers
+                        .iter()
+                        .find(|p| self.resource_providers.get(*p).map(|rp| rp.node_id) == Some(node_id))
+                        .cloned()
+                })
+        } else if self.orchestration_logic.is_random_node() {
             let same_workflow_nodes = match Self::workflow_id_of_resource(&resource_req) {
                 Some(wf) => self.same_workflow_nodes(&wf),
                 None => vec![],
@@ -624,6 +639,39 @@ impl OrchestratorTask {
             }
             _ => None,
         };
+
+        // CapacityWeightedRandom must use CAP's eligible-node set for
+        // functions: the function must be feasible and the node must offer
+        // the configured LLM provider. This excludes compute-only nodes such
+        // as mohamed-1 from agent placement. Keep sticky anchors as hard limits.
+        if self.orchestration_logic.is_capacity_weighted_random() {
+            let all: Vec<uuid::Uuid> = self.nodes.keys().cloned().collect();
+            let llm = self.llm_nodes();
+            let mut allowed: Vec<uuid::Uuid> = self
+                .orchestration_logic
+                .feasible_nodes(spawn_req, &all)
+                .into_iter()
+                .filter(|node| llm.contains(node))
+                .collect();
+            if let Some(anchors) = &sticky_nodes {
+                allowed.retain(|node| anchors.contains(node));
+            }
+            if let Some(node_id) = self.orchestration_logic.next_capacity_weighted_random_from(&allowed) {
+                log::info!(
+                    "Placement: function {} -> node {} (workflow {}, capacity-weighted-random, Ollama-provider eligible: {}/{})",
+                    spawn_req.spec.to_short_string(),
+                    node_id,
+                    workflow_id.clone().unwrap_or_else(|| "?".to_string()),
+                    allowed.len(),
+                    llm.len()
+                );
+                return Ok(node_id);
+            }
+            return Err(anyhow::anyhow!(
+                "no feasible Ollama-provider node for function {} under CapacityWeightedRandom",
+                spawn_req.spec.to_short_string()
+            ));
+        }
 
         // Intelligent strategy: a function that declares an agent class is
         // placed by the predictive rule, on a node that can also host its LLM

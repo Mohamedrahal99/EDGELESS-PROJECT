@@ -107,6 +107,7 @@ pub enum OrchestrationStrategy {
    
     WeightedLeastLoaded,
     CapacityLeastLoaded,
+    CapacityWeightedRandom,
 }
 
 pub fn make_proxy(settings: EdgelessOrcProxySettings) -> std::sync::Arc<tokio::sync::Mutex<dyn proxy::Proxy>> {
